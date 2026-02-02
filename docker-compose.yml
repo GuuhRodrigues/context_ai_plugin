@@ -1,0 +1,46 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - redis
+
+  transcription:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "worker.transcription_worker"]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      - redis
+  
+  insights:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "worker.insights_worker"]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - MEETING_ID=test-meeting-1
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - INSIGHTS_MODEL=gpt-4o-mini
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
