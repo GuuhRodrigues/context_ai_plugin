@@ -1,21 +1,33 @@
+import asyncio
 import json
-import redis
-import os
+import websockets
 
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-MEETING_ID = os.getenv("MEETING_ID", "test-meeting-1")
+MEETING_ID = "test-meeting-1"
+WS_URL = f"ws://localhost:8000/insights/{MEETING_ID}"
 
-CHANNEL = f"insights:{MEETING_ID}"
+async def main():
+    print("🧠 Connecting to API insights websocket...")
+    async with websockets.connect(WS_URL, max_size=None) as ws:
+        print("✅ Connected! Waiting events...\n")
 
-r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
-pubsub = r.pubsub()
-pubsub.subscribe(CHANNEL)
+        async for msg in ws:
+            data = json.loads(msg)
 
-print("🧠 listening insights...")
+            kind = data.get("kind")
 
-for msg in pubsub.listen():
-    if msg["type"] != "message":
-        continue
-    data = json.loads(msg["data"])
-    print(json.dumps(data, ensure_ascii=False, indent=2))
+            if kind == "qa":
+                print("💬 QUESTION DETECTED")
+                print("Q:", data["qa"]["question"])
+                print("A:", data["qa"]["answer"])
+                print("confidence:", data["qa"]["confidence"])
+                print("-" * 60)
+
+            elif kind == "insight":
+                print("✨ INSIGHT")
+                print(json.dumps(data["insights"], indent=2, ensure_ascii=False))
+                print("-" * 60)
+
+            else:
+                print("RAW:", msg)
+
+asyncio.run(main())
