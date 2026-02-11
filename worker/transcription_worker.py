@@ -4,7 +4,9 @@ import asyncio
 import base64
 import json
 import os
+import time
 from dataclasses import dataclass
+from typing import Dict, Any, Optional, Set, Tuple
 
 import redis
 import websockets
@@ -14,22 +16,77 @@ REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
-MEETING_ID = os.getenv("MEETING_ID", "test-meeting-1")
+OPENAI_REALTIME_URL = os.getenv(
+    "OPENAI_REALTIME_URL",
+    "wss://api.openai.com/v1/realtime?intent=transcription",
+)
 
-AUDIO_STREAM_KEY = f"audio:{MEETING_ID}"
-TRANSCRIPT_CHANNEL = f"transcript:{MEETING_ID}"
+TRANSCRIBE_MODEL = os.getenv("TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
+TRANSCRIBE_LANGUAGE = os.getenv("TRANSCRIBE_LANGUAGE", "pt")
 
-# transcription-only session
-REALTIME_URL = "wss://api.openai.com/v1/realtime?intent=transcription"
+SCAN_INTERVAL_SECONDS = float(os.getenv("AUDIO_SCAN_INTERVAL_SECONDS", "1.0"))
+STREAM_READ_COUNT = int(os.getenv("AUDIO_STREAM_READ_COUNT", "10"))
+STREAM_READ_BLOCK_MS = int(os.getenv("AUDIO_STREAM_READ_BLOCK_MS", "1000"))
+
+EVENTS_STREAM_MAXLEN = int(os.getenv("EVENTS_STREAM_MAXLEN", "5000"))
+MEETING_IDLE_TIMEOUT_SECONDS = float(os.getenv("MEETING_IDLE_TIMEOUT_SECONDS", "30"))
+MAX_ACTIVE_MEETINGS = int(os.getenv("MAX_ACTIVE_MEETINGS", "8"))
 
 
-@dataclass
-class RedisStreamCursor:
-    last_id: str = "$"
-
-
-def redis_client() -> redis.Redis:
+def redis_client_bytes() -> redis.Redis:
     return redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=False)
+
+
+def now_ts() -> int:
+    return int(time.time())
+
+
+def decode_if_bytes(x: Any) -> Any:
+    if isinstance(x, (bytes, bytearray)):
+        return x.decode("utf-8", errors="replace")
+    return x
+
+
+def parse_meeting_id_from_audio_key(key: str) -> Optional[str]:
+    if not key.startswith("audio:"):
+        return None
+    return key.split("audio:", 1)[1] or None
+
+
+def events_stream_key(meeting_id: str) -> str:
+    return f"events:{meeting_id}"
+
+
+def transcript_channel(meeting_id: str) -> str:
+    return f"transcript:{meeting_id}"
+
+
+def audio_stream_key(meeting_id: str) -> str:
+    return f"audio:{meeting_id}"
+
+
+def meeting_closed_key(meeting_id: str) -> str:
+    return f"meeting:{meeting_id}:closed"
+
+
+def is_meeting_closed(r: redis.Redis, meeting_id: str) -> bool:
+    try:
+        return bool(r.get(meeting_closed_key(meeting_id)))
+    except Exception:
+        return False
+
+
+def add_event_to_stream(r: redis.Redis, meeting_id: str, payload: Dict[str, Any]) -> None:
+    try:
+        s = json.dumps(payload, ensure_ascii=False)
+        r.xadd(
+            events_stream_key(meeting_id),
+            {"payload": s},
+            maxlen=EVENTS_STREAM_MAXLEN,
+            approximate=True,
+        )
+    except Exception:
+        pass
 
 
 async def openai_ws():
@@ -39,7 +96,7 @@ async def openai_ws():
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
 
     return await websockets.connect(
-        REALTIME_URL,
+        OPENAI_REALTIME_URL,
         extra_headers=headers,
         ping_interval=20,
         ping_timeout=10,
@@ -48,146 +105,211 @@ async def openai_ws():
 
 
 async def send_event(ws, payload: dict):
-    try:
-        await ws.send(json.dumps(payload))
-    except Exception as e:
-        code = getattr(ws, "close_code", None)
-        reason = getattr(ws, "close_reason", None)
-        print(f"❌ ws.send failed: {e} close_code={code} close_reason={reason}", flush=True)
-        raise
+    await ws.send(json.dumps(payload))
 
 
-async def realtime_reader(ws, r: redis.Redis):
-    async for message in ws:
-        evt = json.loads(message)
-        t = evt.get("type")
-
-        if t == "error":
-            print("🧨 Realtime ERROR:", json.dumps(evt, ensure_ascii=False), flush=True)
-            continue
-
-        # Útil para confirmar que o VAD está detectando turnos
-        if t in ("input_audio_buffer.speech_started", "input_audio_buffer.speech_stopped"):
-            print(f"🎛 VAD event: {t} | {json.dumps(evt, ensure_ascii=False)}", flush=True)
-
-        if t in (
-            "conversation.item.input_audio_transcription.delta",
-            "conversation.item.input_audio_transcription.completed",
-        ):
-            out = {
-                "meeting_id": MEETING_ID,
-                "type": t,
-                "item_id": evt.get("item_id"),
-                "content_index": evt.get("content_index"),
-                "text": evt.get("delta", "") if t.endswith(".delta") else evt.get("transcript", ""),
-            }
-            r.publish(TRANSCRIPT_CHANNEL, json.dumps(out, ensure_ascii=False))
-
-
-async def redis_audio_pump(ws, r: redis.Redis, cursor: RedisStreamCursor):
-    print(f"📼 Consuming Redis stream {AUDIO_STREAM_KEY} from {cursor.last_id}", flush=True)
-
-    while True:
-        resp = r.xread({AUDIO_STREAM_KEY: cursor.last_id}, block=1000, count=10)
-        if not resp:
-            continue
-
-        for _, entries in resp:
-            for entry_id, fields in entries:
-                cursor.last_id = entry_id
-
-                pcm16 = fields.get(b"pcm16")
-                if not pcm16:
-                    continue
-
-                # Realtime expects base64 audio bytes for input_audio_buffer.append
-                b64_audio = base64.b64encode(pcm16).decode("ascii")
-                await send_event(ws, {"type": "input_audio_buffer.append", "audio": b64_audio})
-
-                # throttle leve
-                await asyncio.sleep(0.005)
-
-
-async def run_once(r: redis.Redis, cursor: RedisStreamCursor):
-    print("🌐 Connecting to OpenAI Realtime (transcription)...", flush=True)
-    ws = await openai_ws()
-    try:
-        print("✅ Connected to Realtime", flush=True)
-
-        # ✅ Schema correto para transcription session:
-        # session.audio.input.format / transcription / turn_detection
-        # Exemplo oficial no guia de Realtime transcription. :contentReference[oaicite:1]{index=1}
-        await send_event(
-            ws,
-            {
-                "type": "session.update",
-                "session": {
-                    "type": "transcription",
-                    "audio": {
-                        "input": {
-                            "format": {"type": "audio/pcm", "rate": 24000},
-                            "noise_reduction": {"type": "near_field"},
-                            "transcription": {
-                                "model": "gpt-4o-mini-transcribe",
-                                "language": "pt",
-                            },
-                            "turn_detection": {
-                                "type": "server_vad",
-                                "threshold": 0.5,
-                                "prefix_padding_ms": 300,
-                                "silence_duration_ms": 500,
-                            },
-                        }
-                    },
-                    # opcional: logprobs
-                    # "include": ["item.input_audio_transcription.logprobs"],
+async def configure_transcription_session(ws):
+    await send_event(
+        ws,
+        {
+            "type": "session.update",
+            "session": {
+                "type": "transcription",
+                "audio": {
+                    "input": {
+                        "format": {"type": "audio/pcm", "rate": 24000},
+                        "noise_reduction": {"type": "near_field"},
+                        "transcription": {"model": TRANSCRIBE_MODEL, "language": TRANSCRIBE_LANGUAGE},
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "threshold": 0.5,
+                            "prefix_padding_ms": 300,
+                            "silence_duration_ms": 500,
+                        },
+                    }
                 },
             },
-        )
+        },
+    )
 
-        reader_task = asyncio.create_task(realtime_reader(ws, r))
-        pump_task = asyncio.create_task(redis_audio_pump(ws, r, cursor))
 
-        done, pending = await asyncio.wait(
-            {reader_task, pump_task},
-            return_when=asyncio.FIRST_EXCEPTION,
-        )
+@dataclass
+class MeetingState:
+    meeting_id: str
+    last_stream_id: str = "$"
+    last_audio_ts: float = 0.0
 
-        for t in pending:
-            t.cancel()
 
-        for t in done:
-            exc = t.exception()
-            if exc:
-                raise exc
+class MeetingSession:
+    def __init__(self, meeting_id: str):
+        self.meeting_id = meeting_id
+        self.r = redis_client_bytes()
+        self.state = MeetingState(meeting_id=meeting_id, last_stream_id="$", last_audio_ts=time.time())
+        self._stop = asyncio.Event()
 
-    finally:
-        code = getattr(ws, "close_code", None)
-        reason = getattr(ws, "close_reason", None)
-        print(f"🔌 Realtime WS closed code={code} reason={reason}", flush=True)
+    def stop(self):
+        self._stop.set()
+
+    async def run(self):
+        while not self._stop.is_set():
+            try:
+                await self._run_once()
+            except ConnectionClosed as e:
+                print(f"⚠️ [{self.meeting_id}] Realtime ConnectionClosed: {e}. Reconnecting in 2s...")
+                await asyncio.sleep(2)
+            except Exception as e:
+                print(f"❌ [{self.meeting_id}] Session error: {e}. Reconnecting in 2s...")
+                await asyncio.sleep(2)
+
+    async def _run_once(self):
+        print(f"🌐 [{self.meeting_id}] Connecting to OpenAI Realtime...", flush=True)
+        ws = await openai_ws()
+
         try:
-            await ws.close()
-        except Exception:
-            pass
+            print(f"✅ [{self.meeting_id}] Connected", flush=True)
+            await configure_transcription_session(ws)
+
+            reader_task = asyncio.create_task(self._realtime_reader(ws))
+            pump_task = asyncio.create_task(self._redis_audio_pump(ws))
+
+            done, pending = await asyncio.wait({reader_task, pump_task}, return_when=asyncio.FIRST_EXCEPTION)
+
+            for t in pending:
+                t.cancel()
+
+            for t in done:
+                exc = t.exception()
+                if exc:
+                    raise exc
+
+        finally:
+            try:
+                await ws.close()
+            except Exception:
+                pass
+
+    async def _realtime_reader(self, ws):
+        async for message in ws:
+            evt = json.loads(message)
+            t = evt.get("type")
+
+            if t == "error":
+                print(f"🧨 [{self.meeting_id}] Realtime ERROR: {json.dumps(evt, ensure_ascii=False)}", flush=True)
+                continue
+
+            if t in (
+                "conversation.item.input_audio_transcription.delta",
+                "conversation.item.input_audio_transcription.completed",
+            ):
+                out = {
+                    "meeting_id": self.meeting_id,
+                    "ts": now_ts(),
+                    "kind": "transcript.delta" if t.endswith(".delta") else "transcript.completed",
+                    "type": t,
+                    "item_id": evt.get("item_id"),
+                    "content_index": evt.get("content_index"),
+                    "text": evt.get("delta", "") if t.endswith(".delta") else evt.get("transcript", ""),
+                }
+
+                self.r.publish(transcript_channel(self.meeting_id), json.dumps(out, ensure_ascii=False))
+                add_event_to_stream(self.r, self.meeting_id, out)
+
+    async def _redis_audio_pump(self, ws):
+        skey = audio_stream_key(self.meeting_id)
+        print(f"📼 [{self.meeting_id}] Consuming {skey}", flush=True)
+
+        while not self._stop.is_set():
+            if is_meeting_closed(self.r, self.meeting_id):
+                print(f"🛑 [{self.meeting_id}] meeting closed - stopping session")
+                self.stop()
+                return
+
+            if (time.time() - self.state.last_audio_ts) > MEETING_IDLE_TIMEOUT_SECONDS:
+                print(f"🛑 [{self.meeting_id}] idle for {MEETING_IDLE_TIMEOUT_SECONDS}s - stopping session")
+                self.stop()
+                return
+
+            resp = self.r.xread({skey: self.state.last_stream_id}, block=STREAM_READ_BLOCK_MS, count=STREAM_READ_COUNT)
+            if not resp:
+                continue
+
+            for _, entries in resp:
+                for entry_id, fields in entries:
+                    self.state.last_stream_id = entry_id
+                    pcm16 = fields.get(b"pcm16")
+                    if not pcm16:
+                        continue
+
+                    self.state.last_audio_ts = time.time()
+                    b64_audio = base64.b64encode(pcm16).decode("ascii")
+                    await send_event(ws, {"type": "input_audio_buffer.append", "audio": b64_audio})
+                    await asyncio.sleep(0.005)
+
+
+async def scan_audio_streams(r: redis.Redis) -> Set[str]:
+    cursor = 0
+    found: Set[str] = set()
+
+    while True:
+        cursor, keys = r.scan(cursor=cursor, match="audio:*", count=200)
+        for k in keys:
+            key_str = decode_if_bytes(k)
+            mid = parse_meeting_id_from_audio_key(key_str)
+            if mid:
+                found.add(mid)
+        if cursor == 0:
+            break
+
+    return found
 
 
 async def main():
-    print("✅ worker booted", flush=True)
-    print(f"MEETING_ID={MEETING_ID}", flush=True)
-    print(f"AUDIO_STREAM_KEY={AUDIO_STREAM_KEY}", flush=True)
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY ausente no ambiente")
 
-    r = redis_client()
-    cursor = RedisStreamCursor(last_id="$")
+    r = redis_client_bytes()
+    sessions: Dict[str, MeetingSession] = {}
+
+    last_stats: Optional[Tuple[int, int]] = None
+
+    print("✅ transcription_router booted")
+    print(f"🔎 scanning audio:* every {SCAN_INTERVAL_SECONDS}s")
+    print(f"🧯 MAX_ACTIVE_MEETINGS={MAX_ACTIVE_MEETINGS}")
 
     while True:
         try:
-            await run_once(r, cursor)
-        except ConnectionClosed as e:
-            print(f"⚠️ ConnectionClosed: {e}. Reconnecting in 2s...", flush=True)
-            await asyncio.sleep(2)
+            meeting_ids = await scan_audio_streams(r)
+
+            # remove stopped sessions
+            for mid in list(sessions.keys()):
+                if sessions[mid]._stop.is_set():
+                    sessions.pop(mid, None)
+                    print(f"➖ removed meeting session: {mid}")
+
+            # start new sessions (respect cap)
+            for mid in sorted(meeting_ids):
+                if mid in sessions:
+                    continue
+                if is_meeting_closed(r, mid):
+                    continue
+                if len(sessions) >= MAX_ACTIVE_MEETINGS:
+                    break
+
+                print(f"➕ starting meeting session: {mid}")
+                s = MeetingSession(mid)
+                sessions[mid] = s
+                asyncio.create_task(s.run())
+
+            # ✅ log only when it changes
+            stats = (len(meeting_ids), len(sessions))
+            if stats != last_stats:
+                print(f"📊 meetings_seen={stats[0]} active_sessions={stats[1]}")
+                last_stats = stats
+
         except Exception as e:
-            print(f"❌ Worker error: {e}. Reconnecting in 2s...", flush=True)
-            await asyncio.sleep(2)
+            print(f"❌ router error: {e}")
+
+        await asyncio.sleep(SCAN_INTERVAL_SECONDS)
 
 
 if __name__ == "__main__":

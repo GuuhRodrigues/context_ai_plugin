@@ -8,6 +8,8 @@ services:
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - MEETING_TOKEN_TTL_SECONDS=7200
+      - MEETING_CLOSED_TTL_SECONDS=7200
     depends_on:
       - redis
 
@@ -21,9 +23,14 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - TRANSCRIBE_MODEL=gpt-4o-mini-transcribe
+      - TRANSCRIBE_LANGUAGE=pt
+      - AUDIO_SCAN_INTERVAL_SECONDS=1.0
+      - MEETING_IDLE_TIMEOUT_SECONDS=30
+      - MAX_ACTIVE_MEETINGS=3
     depends_on:
       - redis
-  
+
   insights:
     build:
       context: .
@@ -33,9 +40,9 @@ services:
       - PYTHONUNBUFFERED=1
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - MEETING_ID=test-meeting-1
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - INSIGHTS_MODEL=gpt-4o-mini
+      - INSIGHTS_DEDUP_TTL_SECONDS=120
     depends_on:
       - redis
 

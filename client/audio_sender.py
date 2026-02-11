@@ -1,13 +1,20 @@
 import asyncio
 import queue
+import os
 
 import numpy as np
 import sounddevice as sd
 import websockets
+from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
-SAMPLE_RATE = 24000  # <-- Realtime pcm16 exige 24kHz :contentReference[oaicite:2]{index=2}
-MEETING_ID = "test-meeting-1"
-WS_URL = f"ws://localhost:8000/audio/{MEETING_ID}"
+SAMPLE_RATE = 24000  # Realtime pcm16 exige 24kHz
+MEETING_ID = os.getenv("MEETING_ID", "test-meeting-1")
+TOKEN = os.getenv("TOKEN", "")
+
+if not TOKEN:
+    raise RuntimeError("TOKEN not set. Export TOKEN=...")
+
+WS_URL = f"ws://localhost:8000/audio/{MEETING_ID}?token={TOKEN}"
 
 audio_queue: "queue.Queue[bytes]" = queue.Queue(maxsize=50)
 
@@ -21,7 +28,7 @@ def float32_to_pcm16_bytes(x: np.ndarray) -> bytes:
     return i16.tobytes()
 
 
-def audio_callback(indata, frames, time, status):
+def audio_callback(indata, frames, time_info, status):
     try:
         mono = indata[:, 0].astype(np.float32)
         audio_queue.put_nowait(float32_to_pcm16_bytes(mono))
@@ -39,6 +46,7 @@ async def send_audio(ws):
 
 
 async def stream_audio():
+    print(f"🎙 Target: {WS_URL}")
     while True:
         try:
             async with websockets.connect(
@@ -47,7 +55,7 @@ async def stream_audio():
                 ping_timeout=10,
                 max_size=None,
             ) as ws:
-                print("🎙 Streaming connected")
+                print(f"🎙 Streaming connected: {WS_URL}")
 
                 with sd.InputStream(
                     samplerate=SAMPLE_RATE,
@@ -57,6 +65,18 @@ async def stream_audio():
                     callback=audio_callback,
                 ):
                     await send_audio(ws)
+
+        except ConnectionClosedError as e:
+            # 1008 = policy violation (meeting fechado / token inválido)
+            if getattr(e, "code", None) == 1008:
+                print("🛑 Server rejected (1008). Meeting likely closed or token invalid. Stopping.")
+                return
+            print("🔁 Reconnecting in 2s...", e)
+            await asyncio.sleep(2)
+
+        except ConnectionClosedOK as e:
+            print("🛑 Connection closed cleanly:", e)
+            return
 
         except Exception as e:
             print("🔁 Reconnecting in 2s...", e)
