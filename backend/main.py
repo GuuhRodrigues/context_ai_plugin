@@ -7,10 +7,10 @@ import uuid
 from typing import Any, Optional
 
 import redis
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, HTTPException, Query, WebSocket
 from pydantic import BaseModel
 
-from backend.config import REDIS_HOST, REDIS_PORT
+from backend.config import API_BASE_URL, REDIS_HOST, REDIS_PORT
 
 app = FastAPI()
 
@@ -32,9 +32,33 @@ class CreateMeetingResponse(BaseModel):
     expires_in_seconds: int
 
 
+class MeetingStatusResponse(BaseModel):
+    meeting_id: str
+    status: str  # "open" | "closed"
+    expires_in_seconds: Optional[int] = None  # only when status=open
+
+
+class RefreshTokenRequest(BaseModel):
+    token: str
+
+
+class RefreshTokenResponse(BaseModel):
+    token: str
+    ws_url: str
+    audio_url: str
+    expires_in_seconds: int
+
+
 # -----------------------
 # Utils
 # -----------------------
+def _ws_base_url() -> str:
+    """Derive WebSocket base URL from API_BASE_URL (http->ws, https->wss)."""
+    if API_BASE_URL.startswith("https://"):
+        return API_BASE_URL.replace("https://", "wss://", 1)
+    return API_BASE_URL.replace("http://", "ws://", 1)
+
+
 def _decode_if_bytes(x: Any) -> Any:
     if isinstance(x, (bytes, bytearray)):
         return x.decode("utf-8", errors="replace")
@@ -163,18 +187,71 @@ def root():
     return {"service": "plugin-talk-sense", "status": "running"}
 
 
+@app.get("/meetings/{meeting_id}", response_model=MeetingStatusResponse)
+def get_meeting_status(
+    meeting_id: str,
+    token: str = Query(..., description="Meeting token (required for auth)"),
+):
+    """
+    Returns meeting status. Requires valid token.
+    - status: "open" when meeting is active
+    - expires_in_seconds: remaining token TTL
+    Returns 401 for invalid/expired token or closed meeting.
+    """
+    if not _validate_token(meeting_id, token):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    ttl = r.ttl(_meeting_token_key(meeting_id))
+    expires_in = ttl if ttl > 0 else MEETING_TOKEN_TTL_SECONDS
+
+    return MeetingStatusResponse(
+        meeting_id=meeting_id,
+        status="open",
+        expires_in_seconds=expires_in,
+    )
+
+
 @app.post("/meetings", response_model=CreateMeetingResponse)
 def create_meeting():
     meeting_id = str(uuid.uuid4())
     token = secrets.token_urlsafe(32)
     _save_meeting_token(meeting_id, token)
 
-    ws_url = f"ws://localhost:8000/ws/{meeting_id}?token={token}&backfill={DEFAULT_BACKFILL_SECONDS}"
-    audio_url = f"ws://localhost:8000/audio/{meeting_id}?token={token}"
+    base = _ws_base_url()
+    ws_url = f"{base}/ws/{meeting_id}?token={token}&backfill={DEFAULT_BACKFILL_SECONDS}"
+    audio_url = f"{base}/audio/{meeting_id}?token={token}"
 
     return CreateMeetingResponse(
         meeting_id=meeting_id,
         token=token,
+        ws_url=ws_url,
+        audio_url=audio_url,
+        expires_in_seconds=MEETING_TOKEN_TTL_SECONDS,
+    )
+
+
+@app.post("/meetings/{meeting_id}/refresh", response_model=RefreshTokenResponse)
+def refresh_meeting_token(meeting_id: str, body: RefreshTokenRequest):
+    """
+    Renew the meeting token and extend TTL. Requires current valid token.
+    Returns new token and updated ws_url/audio_url. Use the new token for subsequent requests.
+    Cannot refresh a closed meeting.
+    """
+    if _is_meeting_closed(meeting_id):
+        raise HTTPException(status_code=401, detail="Meeting is closed")
+    
+    if not _validate_token(meeting_id, body.token):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    new_token = secrets.token_urlsafe(32)
+    _save_meeting_token(meeting_id, new_token)
+
+    base = _ws_base_url()
+    ws_url = f"{base}/ws/{meeting_id}?token={new_token}&backfill={DEFAULT_BACKFILL_SECONDS}"
+    audio_url = f"{base}/audio/{meeting_id}?token={new_token}"
+
+    return RefreshTokenResponse(
+        token=new_token,
         ws_url=ws_url,
         audio_url=audio_url,
         expires_in_seconds=MEETING_TOKEN_TTL_SECONDS,

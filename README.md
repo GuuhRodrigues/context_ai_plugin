@@ -69,6 +69,8 @@ Backfill is replayed from `events:{meeting_id}` and then live events continue vi
   - `audio_url` (audio websocket)
   - TTL
 
+- `GET /meetings/{meeting_id}?token=...` returns meeting status (`open`) and `expires_in_seconds` when token is valid; returns 401 otherwise.
+- `POST /meetings/{meeting_id}/refresh` with body `{"token": "..."}` returns a new token and updated `ws_url`/`audio_url`; use it to renew before expiry (e.g. reconnecting or long meetings).
 - All WebSocket routes require `?token=`.
 - On meeting close:
   - token is revoked
@@ -171,6 +173,7 @@ CONTEXT_AI_PLUGIN/
 | Variable | Used by | Default | Notes |
 |---|---|---:|---|
 | `OPENAI_API_KEY` | workers | — | Required |
+| `API_BASE_URL` | api | `http://localhost:8000` | Public base URL for `ws_url`/`audio_url` in create/refresh (http→ws, https→wss) |
 | `REDIS_HOST` | api/workers | `localhost` | In Docker: `redis` |
 | `REDIS_PORT` | api/workers | `6379` | — |
 | `MEETING_TOKEN_TTL_SECONDS` | api | `7200` | Token lifetime |
@@ -219,7 +222,21 @@ python client/unified_ws_listener.py
 python client/audio_sender.py
 ```
 
-### 5) Close meeting (kills active sockets + cleans Redis)
+### 5) Check meeting status (optional)
+
+```bash
+curl "http://localhost:8000/meetings/$MEETING_ID?token=$TOKEN"
+```
+
+### 6) Refresh token (optional, for long meetings)
+
+```bash
+curl -X POST "http://localhost:8000/meetings/$MEETING_ID/refresh" -H "Content-Type: application/json" -d "{\"token\": \"$TOKEN\"}"
+```
+
+Update `TOKEN` (and reconnect WebSockets if needed) with the new token from the response.
+
+### 7) Close meeting (kills active sockets + cleans Redis)
 
 ```bash
 curl -X POST "http://localhost:8000/meetings/$MEETING_ID/close"
@@ -313,9 +330,10 @@ A browser plugin that provides real‑time conversational assistance during meet
 
 ## 🛣️ Roadmap (next milestones)
 
-- Meeting status endpoint (`GET /meetings/{meeting_id}`)
+- ~~Meeting status endpoint (`GET /meetings/{meeting_id}`)~~ ✅
+- ~~Token refresh / session renewal flow~~ ✅
+- ~~URLs dinâmicas (`API_BASE_URL`)~~ ✅
 - Browser extension UI overlay
-- Token refresh / session renewal flow
 - Metrics + observability
 - Production deployment (cloud)
 
