@@ -1,130 +1,324 @@
-# Context AI Plugin --- Real‑time Meeting Copilot 🎧🧠
 
-A real‑time conversation assistant that listens to live audio,
-transcribes speech, generates insights, detects questions, and streams
-everything back to a browser plugin via WebSocket.
+# Context AI Plugin — Real‑time Meeting Copilot 🎧🧠
 
-This project is designed as the backend for a browser extension that
-helps users during meetings, interviews, or conversations.
+![Python](https://img.shields.io/badge/Python-3.11+-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-WebSockets-009688)
+![Redis](https://img.shields.io/badge/Redis-Streams%20%2B%20PubSub-D82C20)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED)
+![Status](https://img.shields.io/badge/Stage-Prototype%20%2F%20MVP-orange)
 
-------------------------------------------------------------------------
+A real‑time conversation assistant that captures live audio, produces real‑time transcripts, generates helpful insights, detects questions, and streams everything back to a UI (browser extension) over WebSockets.
 
-# ✨ Features
+This repository currently contains:
+- A FastAPI backend (meeting lifecycle + WebSocket gateways)
+- Background workers (transcription router + insights generation)
+- Client scripts that simulate the browser extension behavior
 
-• Live microphone audio streaming (PCM16 @ 24kHz)\
-• Real‑time transcription using OpenAI Realtime API\
-• AI insights generated from conversation context\
-• Question detection + instant answer generation (QA mode)\
-• WebSocket unified stream for UI/plugin\
-• Multi‑meeting support with token authentication\
-• Meeting lifecycle: create → use → close → cleanup\
-• Redis used as real‑time event bus + backfill storage\
-• Dockerized architecture
+---
 
-------------------------------------------------------------------------
+## ✨ What it does
 
-# 🧱 Architecture Overview
+- **Live microphone streaming** (PCM16 @ 24kHz)
+- **Realtime transcription** (OpenAI Realtime API — transcription intent)
+- **Insights generation** (summaries, key terms, action hints)
+- **Question detection + answers (QA)** when the user asks something directly
+- **Unified meeting WebSocket** for UI/plugin: backfill + live stream in one socket
+- **Multi‑meeting support** with per‑meeting token auth
+- **Meeting lifecycle**: create → use → close → cleanup (Redis purge + session shutdown)
 
-Audio Sender → API → Redis Streams → Transcription Worker → Redis PubSub
-→ Insights Worker → Redis PubSub → Unified WebSocket → Browser Plugin
+---
 
-Key concepts:
+## 🧱 System Architecture
 
-• `/audio/{meeting}` → receives PCM audio chunks\
-• `transcription_worker` → sends audio to OpenAI Realtime and publishes
-transcripts\
-• `insights_worker` → generates insights + answers from transcripts\
-• `/ws/{meeting}` → unified WebSocket for UI (transcripts + insights +
-QA)
+### High‑level flow
 
-------------------------------------------------------------------------
+```mermaid
+flowchart LR
+  A[Browser Extension / UI] -->|WS: /audio/:meeting| B[FastAPI API]
+  A -->|WS: /ws/:meeting| B
+  B -->|Redis Stream: audio::meeting| R[(Redis)]
+  R -->|Stream consumer| T[transcription_worker]
+  T -->|PubSub: transcript::meeting| R
+  T -->|XADD: events::meeting| R
+  R -->|PubSub: transcript::meeting| I[insights_worker]
+  I -->|PubSub: insights::meeting| R
+  R -->|WS push| B
+  B -->|WS messages| A
+```
 
-# 📂 Project Structure
+### Event stream model (UI receives)
 
-backend/ - main.py → FastAPI server (meetings, websockets, auth,
-lifecycle) - config.py → environment settings
+The UI receives a single WebSocket stream (`/ws/{meeting_id}`) that can include:
 
-worker/ - transcription_worker.py → multi‑meeting realtime transcription
-router - insights_worker.py → generates insights + QA from transcripts -
-prompts.py → all system prompts
+- `transcript.completed` (final transcript chunk for a spoken turn)
+- `insight` (generated insight payload)
+- `qa` (question detected + answer)
 
-client/ - audio_sender.py → streams microphone audio -
-unified_ws_listener.py → simulates browser plugin - create_meeting.py →
-creates meeting + token
+Backfill is replayed from `events:{meeting_id}` and then live events continue via PubSub.
 
-docker-compose.yml → runs API + workers + Redis
+---
 
-------------------------------------------------------------------------
+## 🔐 Meeting Lifecycle & Security
 
-# 🔐 Meeting Lifecycle
+### Token model
 
-Create meeting: POST /meetings
+- A meeting is created using `POST /meetings` which returns:
+  - `meeting_id`
+  - `token`
+  - `ws_url` (unified websocket)
+  - `audio_url` (audio websocket)
+  - TTL
 
-Returns: - meeting_id - token - ws_url - audio_url
+- All WebSocket routes require `?token=`.
+- On meeting close:
+  - token is revoked
+  - active WS connections are killed (`1008 policy violation`)
+  - Redis keys are purged (`audio:*`, `events:*`, `dedup:*`)
 
-Close meeting: POST /meetings/{id}/close
+### Sequence: create → use → close
 
-This automatically: • revokes token • kills active WebSockets • stops
-transcription session • cleans Redis data (audio/events/dedup)
+```mermaid
+sequenceDiagram
+  participant UI as UI/Plugin
+  participant API as FastAPI
+  participant Redis as Redis
+  participant TR as transcription_worker
+  participant IN as insights_worker
+  participant OpenAI as OpenAI Realtime
 
-------------------------------------------------------------------------
+  UI->>API: POST /meetings
+  API-->>UI: meeting_id + token + ws_url + audio_url
 
-# 🚀 Running Locally
+  UI->>API: WS connect /ws/{meeting}?token=...
+  API->>Redis: XRANGE events:{meeting} (backfill)
+  Redis-->>API: backfill events
+  API-->>UI: backfill messages
 
-## 1) Start services
+  UI->>API: WS connect /audio/{meeting}?token=...
+  UI->>API: send pcm16 chunks
+  API->>Redis: XADD audio:{meeting} {pcm16}
 
+  TR->>Redis: XREAD audio:{meeting}
+  TR->>OpenAI: Realtime transcription session
+  OpenAI-->>TR: transcript events
+  TR->>Redis: PUBLISH transcript:{meeting}
+  TR->>Redis: XADD events:{meeting} {payload}
+
+  IN->>Redis: SUBSCRIBE transcript:{meeting}
+  IN->>Redis: PUBLISH insights:{meeting}
+  IN->>Redis: XADD events:{meeting} {payload}
+
+  API->>Redis: SUBSCRIBE transcript:{meeting}, insights:{meeting}
+  Redis-->>API: events
+  API-->>UI: live messages
+
+  UI->>API: POST /meetings/{meeting}/close
+  API->>Redis: revoke token + mark closed
+  API->>Redis: DEL audio:{meeting}, events:{meeting}, dedup:{meeting}:*
+  API-->>UI: {status: closed}
+  API-->>UI: WS close 1008 (active connections)
+```
+
+---
+
+## 📂 Project Structure
+
+```text
+CONTEXT_AI_PLUGIN/
+│
+├── backend/
+│   ├── config.py               # Environment configuration
+│   ├── main.py                 # FastAPI server (meetings, websockets, auth, lifecycle)
+│   └── requirements.txt
+│
+├── client/
+│   ├── __init__.py
+│   ├── audio_sender.py         # Streams microphone audio (PCM16 24kHz)
+│   ├── create_meeting.py       # Creates meeting + token
+│   ├── events_listener.py      # Legacy (split streams) listener
+│   ├── insights_listener.py    # Legacy insights listener
+│   └── unified_ws_listener.py  # Simulates plugin: unified backfill + live stream
+│
+├── worker/
+│   ├── __init__.py
+│   ├── transcription_worker.py # Multi-meeting realtime transcription router
+│   ├── insights_worker.py      # Generates insights + QA
+│   └── prompts.py              # Centralized AI prompts
+│
+├── docker-compose.yml
+├── Dockerfile
+├── pyproject.toml
+├── uv.lock
+├── .env
+└── README.md
+```
+
+---
+
+## ✅ Requirements
+
+- Python **3.11+**
+- Docker + Docker Compose
+- A Redis instance (included via compose)
+- `OPENAI_API_KEY` set in your environment (or `.env`)
+
+---
+
+## 🔧 Configuration
+
+### Environment variables
+
+| Variable | Used by | Default | Notes |
+|---|---|---:|---|
+| `OPENAI_API_KEY` | workers | — | Required |
+| `REDIS_HOST` | api/workers | `localhost` | In Docker: `redis` |
+| `REDIS_PORT` | api/workers | `6379` | — |
+| `MEETING_TOKEN_TTL_SECONDS` | api | `7200` | Token lifetime |
+| `MEETING_CLOSED_TTL_SECONDS` | api | `7200` | Closed flag retention |
+| `INSIGHTS_MODEL` | insights_worker | `gpt-4o-mini` | Chat model |
+| `INSIGHTS_HISTORY_MAXLEN` | insights_worker | `12` | Rolling window |
+| `INSIGHTS_CONTEXT_TAKE_LAST` | insights_worker | `8` | Context slice |
+| `INSIGHTS_DEBOUNCE_SECONDS` | insights_worker | `120` | Insight rate limit |
+| `MAX_ACTIVE_MEETINGS` | transcription_worker | `8` | Router capacity |
+| `MEETING_IDLE_TIMEOUT_SECONDS` | transcription_worker | `30` | Auto stop |
+
+> Tip: keep `INSIGHTS_DEBOUNCE_SECONDS=120` to reduce spam and cost.
+
+---
+
+## 🚀 Run locally (end‑to‑end)
+
+### 1) Start services
+
+```bash
 docker compose up --build
+```
 
-## 2) Create a meeting
+### 2) Create a meeting (returns meeting_id + token)
 
+```bash
 python client/create_meeting.py
+```
 
-Export variables: export MEETING_ID="..." export TOKEN="..."
+Export the returned values:
 
-## 3) Start UI listener
+```bash
+export MEETING_ID="..."
+export TOKEN="..."
+```
 
+### 3) Start unified listener (simulates the plugin)
+
+```bash
 python client/unified_ws_listener.py
+```
 
-## 4) Start audio streaming
+### 4) Start audio streaming
 
+```bash
 python client/audio_sender.py
+```
 
-## 5) Close meeting
+### 5) Close meeting (kills active sockets + cleans Redis)
 
-curl -X POST http://localhost:8000/meetings/\$MEETING_ID/close
+```bash
+curl -X POST "http://localhost:8000/meetings/$MEETING_ID/close"
+```
 
-------------------------------------------------------------------------
+---
 
-# 🧠 AI Agents Instructions
+## 🧪 Quick sanity checks
+
+### Health
+
+```bash
+curl http://localhost:8000/health
+```
+
+### Confirm Redis cleanup after close (optional)
+
+```bash
+docker exec -it <redis_container> redis-cli EXISTS "audio:$MEETING_ID"
+docker exec -it <redis_container> redis-cli EXISTS "events:$MEETING_ID"
+docker exec -it <redis_container> redis-cli SCAN 0 MATCH "dedup:$MEETING_ID:*" COUNT 10
+```
+
+Expected:
+- `audio:*` and `events:*` → `0` after close
+- `dedup:*` → empty
+
+---
+
+## 🧯 Troubleshooting
+
+### Audio connects then closes with 1008
+This means the meeting is **closed** or the `token` is **invalid/expired**.
+
+- Re-create a meeting with `python client/create_meeting.py`
+- Export the new `MEETING_ID` + `TOKEN`
+
+### No transcripts
+- Check `OPENAI_API_KEY` is set for the `transcription` container.
+- Ensure your microphone works and sample rate is 24kHz.
+- Confirm `audio_sender.py` is pointing to the correct meeting/token.
+
+### Insights not showing
+- Confirm `insights_worker` is running.
+- Verify `INSIGHTS_MODEL` and API key.
+- Check `INSIGHTS_DEBOUNCE_SECONDS` (e.g., 120s means fewer insights).
+
+---
+
+## 🧠 AI Agents Instructions (IMPORTANT)
 
 If you are an AI assistant helping with this repository:
 
-You MUST read this section before suggesting changes.
+**Read this section before proposing any change.**
 
-Project stage: This is an early product prototype with
-production‑oriented architecture.
+### Current project state
+This is an MVP/prototype with production‑oriented boundaries:
+- Multi‑meeting support
+- Token‑secured WebSockets
+- Event‑driven streaming
+- Worker scalability
 
-Important invariants: 1. Multi‑meeting support must remain. 2. Token
-auth must protect all WebSocket routes. 3. Closing a meeting must: •
-revoke token • kill active sessions • clean Redis data 4. Workers must
-scale horizontally. 5. Redis is the single event bus.
+### Architectural invariants (DO NOT BREAK)
+1. **Multi‑meeting** must remain.
+2. **Token auth** must protect **all** WebSocket routes.
+3. Closing a meeting must:
+   - revoke token
+   - kill active sessions
+   - clean Redis data
+4. Workers must remain horizontally scalable.
+5. Redis remains the single event bus + backfill storage.
+6. Keep streaming event-driven (no redesign into batch polling).
 
-Do NOT suggest: • removing Redis • removing WebSockets • reverting to
-single‑meeting architecture
+### Do NOT suggest
+- Removing Redis
+- Removing WebSockets
+- Reverting to single‑meeting architecture
+- Synchronous/blocking designs that break realtime flow
+- Polling-based “batch transcription” redesign
 
-When proposing improvements: • Prefer small PRs • Preserve streaming
-design • Avoid breaking realtime flow
+### How to propose improvements
+- Prefer small, reviewable PRs
+- Preserve streaming behavior and meeting lifecycle
+- Keep clear boundaries: `backend/` vs `worker/` vs `client/`
+- Avoid breaking existing client scripts
 
-Main goal of the product: A browser plugin that provides real‑time
-conversational assistance during meetings.
+### Product goal
+A browser plugin that provides real‑time conversational assistance during meetings.
 
-------------------------------------------------------------------------
+---
 
-# 🛣️ Roadmap
+## 🛣️ Roadmap (next milestones)
 
-Next planned milestones: • Meeting status endpoint • Browser extension
-UI • Token refresh • Cloud deployment
+- Meeting status endpoint (`GET /meetings/{meeting_id}`)
+- Browser extension UI overlay
+- Token refresh / session renewal flow
+- Metrics + observability
+- Production deployment (cloud)
 
-------------------------------------------------------------------------
+---
 
-Built with ❤️ for real‑time AI experiences.
+Built for real‑time AI experiences 🚀
