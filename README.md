@@ -12,6 +12,7 @@ A real‑time conversation assistant that captures live audio, produces real‑t
 This repository currently contains:
 - A FastAPI backend (meeting lifecycle + WebSocket gateways)
 - Background workers (transcription router + insights generation)
+- Browser extension (Chrome/Edge) for real-time meeting copilot
 - Client scripts that simulate the browser extension behavior
 
 ---
@@ -133,6 +134,16 @@ CONTEXT_AI_PLUGIN/
 │   ├── main.py                 # FastAPI server (meetings, websockets, auth, lifecycle)
 │   └── requirements.txt
 │
+├── extension/
+│   ├── manifest.json           # Chrome extension manifest (V3)
+│   ├── background.js           # Service worker (API calls, meeting management)
+│   ├── popup.html              # Extension popup UI
+│   ├── popup.js                # Popup logic (audio capture, WebSocket, UI)
+│   ├── content.js              # Content script (placeholder for future overlay)
+│   ├── styles.css              # Popup styles
+│   ├── icons/                  # Extension icons (16x16, 48x48, 128x128)
+│   └── README.md               # Extension setup instructions
+│
 ├── client/
 │   ├── __init__.py
 │   ├── audio_sender.py         # Streams microphone audio (PCM16 24kHz)
@@ -190,6 +201,34 @@ CONTEXT_AI_PLUGIN/
 ---
 
 ## 🚀 Run locally (end‑to‑end)
+
+### Opção A: Usar a Browser Extension (recomendado)
+
+1. **Start services**
+
+```bash
+docker compose up --build
+```
+
+2. **Instalar extensão**
+
+- Abra Chrome/Edge e vá para `chrome://extensions/` (ou `edge://extensions/`)
+- Ative "Modo do desenvolvedor"
+- Clique em "Carregar sem compactação"
+- Selecione a pasta `extension/` deste repositório
+
+3. **Usar a extensão**
+
+- Clique no ícone da extensão na barra de ferramentas
+- Clique em "Iniciar Reunião"
+- Permita acesso ao microfone quando solicitado
+- A transcrição, insights e Q&A aparecerão em tempo real na popup
+
+Veja `extension/README.md` para mais detalhes.
+
+---
+
+### Opção B: Usar scripts client (teste/desenvolvimento)
 
 ### 1) Start services
 
@@ -333,7 +372,7 @@ A browser plugin that provides real‑time conversational assistance during meet
 - ~~Meeting status endpoint (`GET /meetings/{meeting_id}`)~~ ✅
 - ~~Token refresh / session renewal flow~~ ✅
 - ~~URLs dinâmicas (`API_BASE_URL`)~~ ✅
-- Browser extension UI overlay
+- ~~Browser extension UI overlay~~ ✅
 - Metrics + observability
 - Production deployment (cloud)
 
