@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Context AI Plugin</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🎧 Context AI</h1>
+      <p class="subtitle">Meeting Copilot</p>
+    </header>
+
+    <!-- Status Section -->
+    <div id="status-section" class="section">
+      <div class="status-indicator" id="status-indicator">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="status-text">Desconectado</span>
+      </div>
+      <div id="meeting-info" class="meeting-info hidden">
+        <p><strong>Reunião:</strong> <span id="meeting-id-display">-</span></p>
+        <p><strong>Token expira em:</strong> <span id="token-expiry">-</span></p>
+      </div>
+    </div>
+
+    <!-- Controls Section -->
+    <div class="section">
+      <button id="test-btn" class="btn btn-secondary" style="margin-bottom:8px">Testar conexão com a API</button>
+      <span id="test-result" class="test-result hidden"></span>
+      <button id="start-btn" class="btn btn-primary">Iniciar Reunião</button>
+      <button id="stop-btn" class="btn btn-danger hidden">Encerrar Reunião</button>
+      <button id="refresh-btn" class="btn btn-secondary hidden">Renovar Token</button>
+    </div>
+
+    <!-- Transcript Section -->
+    <div class="section">
+      <h2>Transcrição</h2>
+      <div id="transcript-container" class="transcript-container">
+        <p class="empty-state">Nenhuma transcrição ainda...</p>
+      </div>
+    </div>
+
+    <!-- Insights Section -->
+    <div class="section">
+      <h2>Insights</h2>
+      <div id="insights-container" class="insights-container">
+        <p class="empty-state">Nenhum insight ainda...</p>
+      </div>
+    </div>
+
+    <!-- Q&A Section -->
+    <div class="section">
+      <h2>Perguntas & Respostas</h2>
+      <div id="qa-container" class="qa-container">
+        <p class="empty-state">Nenhuma pergunta detectada ainda...</p>
+      </div>
+    </div>
+
+    <!-- Error Display -->
+    <div id="error-message" class="error-message hidden"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

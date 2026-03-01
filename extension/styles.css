@@ -1,0 +1,267 @@
+/* Styles for Context AI Plugin popup */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  width: 400px;
+  min-height: 600px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  background: #f5f5f5;
+  color: #333;
+}
+
+.container {
+  padding: 16px;
+}
+
+header {
+  text-align: center;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+header h1 {
+  font-size: 24px;
+  color: #2196F3;
+  margin-bottom: 4px;
+}
+
+.subtitle {
+  font-size: 12px;
+  color: #666;
+}
+
+.section {
+  margin-bottom: 20px;
+  background: white;
+  padding: 16px;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.section h2 {
+  font-size: 16px;
+  margin-bottom: 12px;
+  color: #333;
+}
+
+/* Status Section */
+.status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.status-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.status-dot.disconnected {
+  background-color: #f44336;
+}
+
+.status-dot.connecting {
+  background-color: #ff9800;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.status-dot.connected {
+  background-color: #4caf50;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.meeting-info {
+  font-size: 12px;
+  color: #666;
+}
+
+.meeting-info p {
+  margin: 4px 0;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* Buttons */
+.btn {
+  width: 100%;
+  padding: 12px;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: 8px;
+}
+
+.btn:last-child {
+  margin-bottom: 0;
+}
+
+.btn-primary {
+  background-color: #2196F3;
+  color: white;
+}
+
+.btn-primary:hover {
+  background-color: #1976D2;
+}
+
+.btn-danger {
+  background-color: #f44336;
+  color: white;
+}
+
+.btn-danger:hover {
+  background-color: #d32f2f;
+}
+
+.btn-secondary {
+  background-color: #757575;
+  color: white;
+}
+
+.btn-secondary:hover {
+  background-color: #616161;
+}
+
+.test-result {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+/* Transcript Container */
+.transcript-container {
+  max-height: 200px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.transcript-item {
+  padding: 8px;
+  margin-bottom: 8px;
+  background: #f9f9f9;
+  border-left: 3px solid #2196F3;
+  border-radius: 4px;
+}
+
+.transcript-item:last-child {
+  margin-bottom: 0;
+}
+
+/* Insights Container */
+.insights-container {
+  max-height: 150px;
+  overflow-y: auto;
+  font-size: 13px;
+}
+
+.insight-item {
+  padding: 10px;
+  margin-bottom: 10px;
+  background: #e3f2fd;
+  border-radius: 4px;
+}
+
+.insight-item strong {
+  display: block;
+  color: #1976D2;
+  margin-bottom: 4px;
+}
+
+.insight-item p {
+  color: #555;
+  line-height: 1.5;
+}
+
+/* Q&A Container */
+.qa-container {
+  max-height: 150px;
+  overflow-y: auto;
+  font-size: 13px;
+}
+
+.qa-item {
+  padding: 10px;
+  margin-bottom: 10px;
+  background: #fff3e0;
+  border-radius: 4px;
+}
+
+.qa-item strong {
+  display: block;
+  color: #f57c00;
+  margin-bottom: 6px;
+}
+
+.qa-item p {
+  color: #555;
+  line-height: 1.5;
+}
+
+/* Empty State */
+.empty-state {
+  text-align: center;
+  color: #999;
+  font-style: italic;
+  padding: 20px;
+}
+
+/* Error Message */
+.error-message {
+  background-color: #ffebee;
+  color: #c62828;
+  padding: 12px;
+  border-radius: 6px;
+  margin-top: 16px;
+  font-size: 13px;
+  border-left: 3px solid #c62828;
+}
+
+/* Scrollbar Styling */
+.transcript-container::-webkit-scrollbar,
+.insights-container::-webkit-scrollbar,
+.qa-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.transcript-container::-webkit-scrollbar-track,
+.insights-container::-webkit-scrollbar-track,
+.qa-container::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
+}
+
+.transcript-container::-webkit-scrollbar-thumb,
+.insights-container::-webkit-scrollbar-thumb,
+.qa-container::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 3px;
+}
+
+.transcript-container::-webkit-scrollbar-thumb:hover,
+.insights-container::-webkit-scrollbar-thumb:hover,
+.qa-container::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}

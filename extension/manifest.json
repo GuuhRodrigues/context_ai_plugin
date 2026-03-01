@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Context AI Plugin",
+  "version": "0.1.0",
+  "description": "Real-time meeting copilot with live transcription, insights, and Q&A",
+  "permissions": ["storage", "activeTab", "scripting", "tabCapture", "desktopCapture", "tabs", "sidePanel"],
+  "host_permissions": ["http://localhost:8000/*", "https://*/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "Context AI" },
+  "side_panel": { "default_path": "popup.html" },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
