@@ -23,6 +23,9 @@ OPENAI_REALTIME_URL = os.getenv(
 
 TRANSCRIBE_MODEL = os.getenv("TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
 TRANSCRIBE_LANGUAGE = os.getenv("TRANSCRIBE_LANGUAGE", "pt")
+TURN_DETECTION_THRESHOLD = float(os.getenv("TURN_DETECTION_THRESHOLD", "0.5"))
+TURN_PREFIX_PADDING_MS = int(os.getenv("TURN_PREFIX_PADDING_MS", "250"))
+TURN_SILENCE_DURATION_MS = int(os.getenv("TURN_SILENCE_DURATION_MS", "300"))
 
 SCAN_INTERVAL_SECONDS = float(os.getenv("AUDIO_SCAN_INTERVAL_SECONDS", "1.0"))
 STREAM_READ_COUNT = int(os.getenv("AUDIO_STREAM_READ_COUNT", "10"))
@@ -122,9 +125,9 @@ async def configure_transcription_session(ws):
                         "transcription": {"model": TRANSCRIBE_MODEL, "language": TRANSCRIBE_LANGUAGE},
                         "turn_detection": {
                             "type": "server_vad",
-                            "threshold": 0.5,
-                            "prefix_padding_ms": 300,
-                            "silence_duration_ms": 500,
+                            "threshold": TURN_DETECTION_THRESHOLD,
+                            "prefix_padding_ms": TURN_PREFIX_PADDING_MS,
+                            "silence_duration_ms": TURN_SILENCE_DURATION_MS,
                         },
                     }
                 },

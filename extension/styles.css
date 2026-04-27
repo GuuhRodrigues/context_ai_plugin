@@ -195,6 +195,11 @@ header h1 {
   line-height: 1.5;
 }
 
+.insight-item .term-name {
+  color: #1565c0;
+  font-weight: 700;
+}
+
 /* Q&A Container */
 .qa-container {
   max-height: 150px;

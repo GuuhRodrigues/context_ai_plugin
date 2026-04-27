@@ -1,7 +1,7 @@
 
 # Context AI Plugin — Real‑time Meeting Copilot 🎧🧠
 
-![Python](https://img.shields.io/badge/Python-3.11+-blue)
+![Python](https://img.shields.io/badge/Python-3.12%2B-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-WebSockets-009688)
 ![Redis](https://img.shields.io/badge/Redis-Streams%20%2B%20PubSub-D82C20)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED)
@@ -20,6 +20,7 @@ This repository currently contains:
 ## ✨ What it does
 
 - **Live microphone streaming** (PCM16 @ 24kHz)
+- **Client-side VAD** to avoid sending long silence segments
 - **Realtime transcription** (OpenAI Realtime API — transcription intent)
 - **Insights generation** (summaries, key terms, action hints)
 - **Question detection + answers (QA)** when the user asks something directly
@@ -136,7 +137,7 @@ CONTEXT_AI_PLUGIN/
 │
 ├── extension/
 │   ├── manifest.json           # Chrome extension manifest (V3)
-│   ├── background.js           # Service worker (API calls, meeting management)
+│   ├── background.js           # Minimal service worker (side panel behavior)
 │   ├── popup.html              # Extension popup UI
 │   ├── popup.js                # Popup logic (audio capture, WebSocket, UI)
 │   ├── content.js              # Content script (placeholder for future overlay)
@@ -170,7 +171,7 @@ CONTEXT_AI_PLUGIN/
 
 ## ✅ Requirements
 
-- Python **3.11+**
+- Python **3.12+**
 - Docker + Docker Compose
 - A Redis instance (included via compose)
 - `OPENAI_API_KEY` set in your environment (or `.env`)
@@ -190,13 +191,31 @@ CONTEXT_AI_PLUGIN/
 | `MEETING_TOKEN_TTL_SECONDS` | api | `7200` | Token lifetime |
 | `MEETING_CLOSED_TTL_SECONDS` | api | `7200` | Closed flag retention |
 | `INSIGHTS_MODEL` | insights_worker | `gpt-4o-mini` | Chat model |
+| `INSIGHTS_MAX_OUTPUT_TOKENS` | insights_worker | `180` | Max output tokens per insights call |
+| `QA_MAX_OUTPUT_TOKENS` | insights_worker | `120` | Max output tokens per QA call |
+| `INSIGHTS_QUESTION_MIN_WORDS` | insights_worker | `4` | Ignore very short/non-actionable questions |
+| `INSIGHTS_QA_MIN_INTERVAL_SECONDS` | insights_worker | `1.5` | Minimum interval between QA publishes per meeting |
 | `INSIGHTS_HISTORY_MAXLEN` | insights_worker | `12` | Rolling window |
 | `INSIGHTS_CONTEXT_TAKE_LAST` | insights_worker | `8` | Context slice |
-| `INSIGHTS_DEBOUNCE_SECONDS` | insights_worker | `120` | Insight rate limit |
+| `INSIGHTS_DEDUP_TTL_SECONDS` | insights_worker | `120` | TTL for dedup of repeated insight payloads |
+| `INSIGHTS_MIN_NEW_TOKENS` | insights_worker | `4` | Minimum context novelty to trigger insight call |
+| `INSIGHTS_CONTEXT_SIMILARITY_THRESHOLD` | insights_worker | `0.92` | Lower values reduce insight frequency |
 | `MAX_ACTIVE_MEETINGS` | transcription_worker | `8` | Router capacity |
 | `MEETING_IDLE_TIMEOUT_SECONDS` | transcription_worker | `30` | Auto stop |
+| `TURN_DETECTION_THRESHOLD` | transcription_worker | `0.5` | Realtime server VAD sensitivity |
+| `TURN_PREFIX_PADDING_MS` | transcription_worker | `250` | Leading audio kept per turn |
+| `TURN_SILENCE_DURATION_MS` | transcription_worker | `300` | Silence needed to finalize a turn (lower = faster) |
 
-> Tip: keep `INSIGHTS_DEBOUNCE_SECONDS=120` to reduce spam and cost.
+> Tip: to reduce model cost, tune `INSIGHTS_MIN_NEW_TOKENS` up and `INSIGHTS_CONTEXT_SIMILARITY_THRESHOLD` down.
+
+### Extension audio upload (VAD)
+
+The extension uses client-side VAD in `extension/popup.js` and only sends frames when speech is detected (plus a short hangover window):
+
+- `VAD_ENABLED`
+- `VAD_RMS_THRESHOLD`
+- `VAD_PEAK_THRESHOLD`
+- `VAD_HANGOVER_MS`
 
 ---
 
@@ -321,7 +340,7 @@ This means the meeting is **closed** or the `token` is **invalid/expired**.
 ### Insights not showing
 - Confirm `insights_worker` is running.
 - Verify `INSIGHTS_MODEL` and API key.
-- Check `INSIGHTS_DEBOUNCE_SECONDS` (e.g., 120s means fewer insights).
+- Check `INSIGHTS_DEDUP_TTL_SECONDS`, `INSIGHTS_MIN_NEW_TOKENS` and `INSIGHTS_CONTEXT_SIMILARITY_THRESHOLD`.
 
 ---
 

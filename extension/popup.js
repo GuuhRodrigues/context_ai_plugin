@@ -4,6 +4,13 @@
 
 const API_BASE = 'http://localhost:8000';
 
+// Client-side VAD (voice activity detection) to avoid sending long silence segments.
+const VAD_ENABLED = true;
+const VAD_RMS_THRESHOLD = 0.008;
+const VAD_PEAK_THRESHOLD = 0.03;
+const VAD_HANGOVER_MS = 700;
+const VAD_DEBUG_LOG_EVERY_MS = 10000;
+
 let currentMeeting = null;
 let audioSocket = null;
 let eventSocket = null;
@@ -13,6 +20,8 @@ let audioContext = null;
 let audioProcessor = null;
 let mixedSource = null;
 let tokenRefreshInterval = null;
+let vadLastSpeechTs = 0;
+let vadLastDebugTs = 0;
 
 const STORAGE_KEYS = ['meeting_id', 'token', 'ws_url', 'audio_url'];
 
@@ -566,11 +575,51 @@ function resampleTo24k(inputFloat32, sourceSampleRate) {
   return result;
 }
 
+function getFrameEnergyMetrics(frame) {
+  let sumSq = 0;
+  let peak = 0;
+  for (let i = 0; i < frame.length; i++) {
+    const v = frame[i];
+    sumSq += v * v;
+    const av = Math.abs(v);
+    if (av > peak) peak = av;
+  }
+  const rms = frame.length > 0 ? Math.sqrt(sumSq / frame.length) : 0;
+  return { rms, peak };
+}
+
+function shouldSendAudioFrame(frame, nowMs) {
+  // When microphone is unavailable, tab audio can be lower/unstable.
+  // In this mode, avoid client-side gating to prevent cutting speech.
+  if (!VAD_ENABLED || !micStream) return true;
+
+  const metrics = getFrameEnergyMetrics(frame);
+  const speechDetected = metrics.rms >= VAD_RMS_THRESHOLD || metrics.peak >= VAD_PEAK_THRESHOLD;
+
+  if (speechDetected) {
+    vadLastSpeechTs = nowMs;
+  }
+
+  const inHangover = (nowMs - vadLastSpeechTs) <= VAD_HANGOVER_MS;
+  const shouldSend = speechDetected || inHangover;
+
+  if (shouldSend && (nowMs - vadLastDebugTs) >= VAD_DEBUG_LOG_EVERY_MS) {
+    console.log(
+      `[VAD] sending audio rms=${metrics.rms.toFixed(4)} peak=${metrics.peak.toFixed(4)}`
+    );
+    vadLastDebugTs = nowMs;
+  }
+
+  return shouldSend;
+}
+
 // Start audio capture using microphone + tab streams mixed together.
 async function startAudioCaptureWithStreams(microphoneStream, activeTabStream) {
   if (!currentMeeting) return;
   micStream = microphoneStream;
   tabStream = activeTabStream;
+  vadLastSpeechTs = 0;
+  vadLastDebugTs = 0;
 
   // AudioContext pode iniciar "suspended" em alguns navegadores; ativar se necessário
   audioContext = new AudioContext();
@@ -599,6 +648,8 @@ async function startAudioCaptureWithStreams(microphoneStream, activeTabStream) {
   audioProcessor.onaudioprocess = (e) => {
     if (!audioSocket || audioSocket.readyState !== WebSocket.OPEN) return;
     const inputData = e.inputBuffer.getChannelData(0);
+    const nowMs = performance.now();
+    if (!shouldSendAudioFrame(inputData, nowMs)) return;
     const resampled = resampleTo24k(inputData, sourceRate);
     const pcm16 = new Int16Array(resampled.length);
     for (let i = 0; i < resampled.length; i++) {
@@ -664,6 +715,9 @@ function stopAudioCapture() {
     audioSocket.close();
     audioSocket = null;
   }
+
+  vadLastSpeechTs = 0;
+  vadLastDebugTs = 0;
 }
 
 // Connect event WebSocket
@@ -795,7 +849,7 @@ function addInsight(data) {
   const insights = data.insights || {};
   const summary = insights.summary || '';
   const keyPoints = insights.key_points || [];
-  const actionItems = insights.action_items || [];
+  const actionItems = insights.actions || insights.action_items || [];
   const terms = insights.terms || [];
   
   const div = document.createElement('div');
@@ -812,7 +866,26 @@ function addInsight(data) {
     html += `<p><strong>Ações:</strong> ${escapeHtml(actionItems.join(', '))}</p>`;
   }
   if (terms.length > 0) {
-    html += `<p><strong>Termos:</strong> ${escapeHtml(terms.join(', '))}</p>`;
+    const termRows = terms
+      .map((t) => {
+        if (typeof t === 'string') {
+          const v = t.trim();
+          if (!v) return '';
+          return `<span class="term-name">${escapeHtml(v)}</span>`;
+        }
+        if (!t || typeof t !== 'object') return '';
+        const term = (t.term || '').trim();
+        const explain = (t.explain || '').trim();
+        if (!term && !explain) return '';
+        if (!term) return escapeHtml(explain);
+        if (!explain) return `<span class="term-name">${escapeHtml(term)}</span>`;
+        return `<span class="term-name">${escapeHtml(term)}</span>: ${escapeHtml(explain)}`;
+      })
+      .filter(Boolean)
+      .join('<br>');
+    if (termRows) {
+      html += `<p><strong>Termos:</strong><br>${termRows}</p>`;
+    }
   }
   
   if (!html) {
@@ -832,7 +905,10 @@ function addQA(data) {
   const qa = data.qa || {};
   const question = (qa.question || data.question || 'Pergunta').trim();
   const answer = (qa.answer || qa.answer_short || data.answer || data.response || '').trim();
-  const confidence = qa.confidence ? ` (confiança: ${(qa.confidence * 100).toFixed(0)}%)` : '';
+  let confidence = '';
+  if (typeof qa.confidence === 'string' && qa.confidence.trim()) {
+    confidence = ` (confiança: ${qa.confidence.trim()})`;
+  }
   
   const div = document.createElement('div');
   div.className = 'qa-item';
