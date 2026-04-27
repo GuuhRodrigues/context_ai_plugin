@@ -159,6 +159,12 @@ CONTEXT_AI_PLUGIN/
 │   ├── insights_worker.py      # Generates insights + QA
 │   └── prompts.py              # Centralized AI prompts
 │
+├── observability/              # Local generated reports (gitignored)
+│   └── meetings/{meeting_id}/
+│       ├── events_YYYY_MM_DD_HH_MM_SS.jsonl
+│       ├── metrics_YYYY_MM_DD_HH_MM_SS.json
+│       └── report_YYYY_MM_DD_HH_MM_SS.md
+│
 ├── docker-compose.yml
 ├── Dockerfile
 ├── pyproject.toml
@@ -190,21 +196,32 @@ CONTEXT_AI_PLUGIN/
 | `REDIS_PORT` | api/workers | `6379` | — |
 | `MEETING_TOKEN_TTL_SECONDS` | api | `7200` | Token lifetime |
 | `MEETING_CLOSED_TTL_SECONDS` | api | `7200` | Closed flag retention |
+| `OBSERVABILITY_ROOT` | api | `observability/meetings` | Local folder for post-meeting artifacts |
+| `TRANSCRIPTION_COST_PER_MINUTE_USD` | api | `0.003` | Estimated transcription cost used in reports |
 | `INSIGHTS_MODEL` | insights_worker | `gpt-4o-mini` | Chat model |
+| `INSIGHTS_INPUT_COST_PER_1M_USD` | insights_worker | `0.15` | Estimated input token cost for reports |
+| `INSIGHTS_OUTPUT_COST_PER_1M_USD` | insights_worker | `0.60` | Estimated output token cost for reports |
 | `INSIGHTS_MAX_OUTPUT_TOKENS` | insights_worker | `180` | Max output tokens per insights call |
-| `QA_MAX_OUTPUT_TOKENS` | insights_worker | `120` | Max output tokens per QA call |
+| `QA_MAX_OUTPUT_TOKENS` | insights_worker | `220` | Max output tokens per QA call |
+| `INSIGHTS_QA_WORKERS` | insights_worker | `2` | Dedicated worker threads for Q&A so answers are not blocked by insights |
+| `INSIGHTS_INSIGHT_WORKERS` | insights_worker | `1` | Worker threads for insights generation |
+| `INSIGHTS_PENDING_LIMIT_PER_MEETING` | insights_worker | `1` | Caps queued insights per meeting to avoid stale backlog |
+| `INSIGHTS_BACKGROUND_DELAY_SECONDS` | insights_worker | `0.5` | Small delay before insight calls; Q&A remains priority |
 | `INSIGHTS_QUESTION_MIN_WORDS` | insights_worker | `4` | Ignore very short/non-actionable questions |
+| `INSIGHTS_QUESTION_ASSEMBLY_WINDOW_SECONDS` | insights_worker | `5.0` | Join nearby short transcript chunks before Q&A |
+| `INSIGHTS_QUESTION_ASSEMBLY_MAX_PARTS` | insights_worker | `4` | Max chunks to join for a fragmented question |
 | `INSIGHTS_QA_MIN_INTERVAL_SECONDS` | insights_worker | `1.5` | Minimum interval between QA publishes per meeting |
 | `INSIGHTS_HISTORY_MAXLEN` | insights_worker | `12` | Rolling window |
 | `INSIGHTS_CONTEXT_TAKE_LAST` | insights_worker | `8` | Context slice |
 | `INSIGHTS_DEDUP_TTL_SECONDS` | insights_worker | `120` | TTL for dedup of repeated insight payloads |
-| `INSIGHTS_MIN_NEW_TOKENS` | insights_worker | `4` | Minimum context novelty to trigger insight call |
-| `INSIGHTS_CONTEXT_SIMILARITY_THRESHOLD` | insights_worker | `0.92` | Lower values reduce insight frequency |
+| `INSIGHTS_MIN_NEW_TOKENS` | insights_worker | `8` | Minimum context novelty to trigger insight call |
+| `INSIGHTS_CONTEXT_SIMILARITY_THRESHOLD` | insights_worker | `0.85` | Lower values reduce insight frequency |
 | `MAX_ACTIVE_MEETINGS` | transcription_worker | `8` | Router capacity |
 | `MEETING_IDLE_TIMEOUT_SECONDS` | transcription_worker | `30` | Auto stop |
+| `OBSERVABILITY_STORE_TRANSCRIPT_DELTAS` | transcription_worker | `false` | Store `transcript.delta` in JSONL only when debugging |
 | `TURN_DETECTION_THRESHOLD` | transcription_worker | `0.5` | Realtime server VAD sensitivity |
 | `TURN_PREFIX_PADDING_MS` | transcription_worker | `250` | Leading audio kept per turn |
-| `TURN_SILENCE_DURATION_MS` | transcription_worker | `300` | Silence needed to finalize a turn (lower = faster) |
+| `TURN_SILENCE_DURATION_MS` | transcription_worker | `700` | Silence needed to finalize a turn (lower = faster, higher = less fragmented) |
 
 > Tip: to reduce model cost, tune `INSIGHTS_MIN_NEW_TOKENS` up and `INSIGHTS_CONTEXT_SIMILARITY_THRESHOLD` down.
 
@@ -216,6 +233,22 @@ The extension uses client-side VAD in `extension/popup.js` and only sends frames
 - `VAD_RMS_THRESHOLD`
 - `VAD_PEAK_THRESHOLD`
 - `VAD_HANGOVER_MS`
+- `VAD_BYPASS_WITHOUT_MIC`
+- `VAD_CALIBRATION_MS`
+
+The report shows whether VAD gating was really active, why it was bypassed, the calibrated noise floor, and the effective thresholds used during the meeting.
+
+### Post-meeting observability
+
+When a meeting is closed, the API writes local artifacts before purging Redis:
+
+```text
+observability/meetings/{meeting_id}/events_YYYY_MM_DD_HH_MM_SS.jsonl
+observability/meetings/{meeting_id}/metrics_YYYY_MM_DD_HH_MM_SS.json
+observability/meetings/{meeting_id}/report_YYYY_MM_DD_HH_MM_SS.md
+```
+
+The files include transcript history, insights, Q&A, VAD metrics, token usage, latency summaries, and estimated cost. The Docker Compose API service mounts `./observability` into the container so these files remain available on the host.
 
 ---
 

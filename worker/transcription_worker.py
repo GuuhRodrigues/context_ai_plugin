@@ -12,6 +12,13 @@ import redis
 import websockets
 from websockets.exceptions import ConnectionClosed
 
+from backend.observability import (
+    add_observability_event,
+    increment_counter,
+    increment_float_counter,
+    now_ms as obs_now_ms,
+)
+
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
@@ -25,13 +32,18 @@ TRANSCRIBE_MODEL = os.getenv("TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
 TRANSCRIBE_LANGUAGE = os.getenv("TRANSCRIBE_LANGUAGE", "pt")
 TURN_DETECTION_THRESHOLD = float(os.getenv("TURN_DETECTION_THRESHOLD", "0.5"))
 TURN_PREFIX_PADDING_MS = int(os.getenv("TURN_PREFIX_PADDING_MS", "250"))
-TURN_SILENCE_DURATION_MS = int(os.getenv("TURN_SILENCE_DURATION_MS", "300"))
+TURN_SILENCE_DURATION_MS = int(os.getenv("TURN_SILENCE_DURATION_MS", "700"))
 
 SCAN_INTERVAL_SECONDS = float(os.getenv("AUDIO_SCAN_INTERVAL_SECONDS", "1.0"))
 STREAM_READ_COUNT = int(os.getenv("AUDIO_STREAM_READ_COUNT", "10"))
 STREAM_READ_BLOCK_MS = int(os.getenv("AUDIO_STREAM_READ_BLOCK_MS", "1000"))
 
 EVENTS_STREAM_MAXLEN = int(os.getenv("EVENTS_STREAM_MAXLEN", "5000"))
+OBSERVABILITY_STORE_TRANSCRIPT_DELTAS = os.getenv("OBSERVABILITY_STORE_TRANSCRIPT_DELTAS", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 MEETING_IDLE_TIMEOUT_SECONDS = float(os.getenv("MEETING_IDLE_TIMEOUT_SECONDS", "30"))
 MAX_ACTIVE_MEETINGS = int(os.getenv("MAX_ACTIVE_MEETINGS", "8"))
 
@@ -141,6 +153,8 @@ class MeetingState:
     meeting_id: str
     last_stream_id: str = "$"
     last_audio_ts: float = 0.0
+    last_audio_redis_entry_ms: Optional[int] = None
+    last_audio_sent_to_openai_ms: Optional[int] = None
 
 
 class MeetingSession:
@@ -170,6 +184,7 @@ class MeetingSession:
 
         try:
             print(f"✅ [{self.meeting_id}] Connected", flush=True)
+            add_observability_event(self.r, self.meeting_id, "realtime.connected", source="transcription_worker")
             await configure_transcription_session(ws)
 
             reader_task = asyncio.create_task(self._realtime_reader(ws))
@@ -204,18 +219,32 @@ class MeetingSession:
                 "conversation.item.input_audio_transcription.delta",
                 "conversation.item.input_audio_transcription.completed",
             ):
+                received_at_ms = obs_now_ms()
+                timings = {
+                    "transcript_event_received_at_ms": received_at_ms,
+                    "last_audio_redis_entry_ms": self.state.last_audio_redis_entry_ms,
+                    "last_audio_sent_to_openai_at_ms": self.state.last_audio_sent_to_openai_ms,
+                }
+                if self.state.last_audio_sent_to_openai_ms:
+                    timings["estimated_last_audio_to_transcript_ms"] = (
+                        received_at_ms - self.state.last_audio_sent_to_openai_ms
+                    )
+
                 out = {
                     "meeting_id": self.meeting_id,
                     "ts": now_ts(),
+                    "ts_ms": received_at_ms,
                     "kind": "transcript.delta" if t.endswith(".delta") else "transcript.completed",
                     "type": t,
                     "item_id": evt.get("item_id"),
                     "content_index": evt.get("content_index"),
                     "text": evt.get("delta", "") if t.endswith(".delta") else evt.get("transcript", ""),
+                    "timings": timings,
                 }
 
                 self.r.publish(transcript_channel(self.meeting_id), json.dumps(out, ensure_ascii=False))
-                add_event_to_stream(self.r, self.meeting_id, out)
+                if out["kind"] != "transcript.delta" or OBSERVABILITY_STORE_TRANSCRIPT_DELTAS:
+                    add_event_to_stream(self.r, self.meeting_id, out)
 
     async def _redis_audio_pump(self, ws):
         skey = audio_stream_key(self.meeting_id)
@@ -244,6 +273,21 @@ class MeetingSession:
                         continue
 
                     self.state.last_audio_ts = time.time()
+                    entry_id_str = decode_if_bytes(entry_id)
+                    if isinstance(entry_id_str, str) and "-" in entry_id_str:
+                        try:
+                            self.state.last_audio_redis_entry_ms = int(entry_id_str.split("-", 1)[0])
+                        except Exception:
+                            pass
+                    self.state.last_audio_sent_to_openai_ms = obs_now_ms()
+                    increment_counter(self.r, self.meeting_id, "audio_chunks_forwarded_total", 1)
+                    increment_counter(self.r, self.meeting_id, "audio_bytes_forwarded_total", len(pcm16))
+                    increment_float_counter(
+                        self.r,
+                        self.meeting_id,
+                        "audio_seconds_forwarded_estimated",
+                        len(pcm16) / 2 / 24000,
+                    )
                     b64_audio = base64.b64encode(pcm16).decode("ascii")
                     await send_event(ws, {"type": "input_audio_buffer.append", "audio": b64_audio})
                     await asyncio.sleep(0.005)

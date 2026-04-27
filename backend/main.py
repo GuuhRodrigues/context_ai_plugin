@@ -8,9 +8,15 @@ from typing import Any, Optional
 
 import redis
 from fastapi import FastAPI, HTTPException, Query, WebSocket
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.config import API_BASE_URL, REDIS_HOST, REDIS_PORT
+from backend.observability import (
+    add_observability_event,
+    generate_meeting_artifacts,
+    increment_counter,
+    increment_float_counter,
+)
 
 app = FastAPI()
 
@@ -47,6 +53,13 @@ class RefreshTokenResponse(BaseModel):
     ws_url: str
     audio_url: str
     expires_in_seconds: int
+
+
+class ObservabilityEventRequest(BaseModel):
+    token: str
+    kind: str
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 # -----------------------
@@ -140,6 +153,9 @@ def _purge_meeting_data(meeting_id: str) -> None:
     # remove backfill history
     r.delete(f"events:{meeting_id}")
 
+    # remove temporary observability counters after files are generated
+    r.delete(f"observability:{meeting_id}:counters")
+
     # remove dedup keys (pattern)
     # NOTE: use SCAN to avoid blocking redis
     cursor = 0
@@ -216,6 +232,7 @@ def create_meeting():
     meeting_id = str(uuid.uuid4())
     token = secrets.token_urlsafe(32)
     _save_meeting_token(meeting_id, token)
+    add_observability_event(r, meeting_id, "meeting.created")
 
     base = _ws_base_url()
     ws_url = f"{base}/ws/{meeting_id}?token={token}&backfill={DEFAULT_BACKFILL_SECONDS}"
@@ -245,6 +262,7 @@ def refresh_meeting_token(meeting_id: str, body: RefreshTokenRequest):
 
     new_token = secrets.token_urlsafe(32)
     _save_meeting_token(meeting_id, new_token)
+    add_observability_event(r, meeting_id, "meeting.token_refreshed")
 
     base = _ws_base_url()
     ws_url = f"{base}/ws/{meeting_id}?token={new_token}&backfill={DEFAULT_BACKFILL_SECONDS}"
@@ -258,15 +276,44 @@ def refresh_meeting_token(meeting_id: str, body: RefreshTokenRequest):
     )
 
 
+@app.post("/meetings/{meeting_id}/observability")
+def record_meeting_observability(meeting_id: str, body: ObservabilityEventRequest):
+    """
+    Receives lightweight observability events from the extension while the meeting is open.
+    """
+    if not _validate_token(meeting_id, body.token):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    add_observability_event(
+        r,
+        meeting_id,
+        body.kind,
+        metrics=body.metrics,
+        metadata=body.metadata,
+        source="extension",
+    )
+    return {"ok": True}
+
+
 @app.post("/meetings/{meeting_id}/close")
 def close_meeting(meeting_id: str):
+    add_observability_event(r, meeting_id, "meeting.close_requested")
+
     # 1) revoke + mark closed
     _close_meeting(meeting_id)
 
-    # 2) cleanup redis meeting data (C)
+    # 2) write post-meeting artifacts before Redis cleanup
+    try:
+        observability = generate_meeting_artifacts(r, meeting_id)
+    except Exception as e:
+        observability = {"error": str(e)}
+
+    # 3) cleanup redis meeting data (C)
     _purge_meeting_data(meeting_id)
 
-    return {"meeting_id": meeting_id, "status": "closed"}
+    return {"meeting_id": meeting_id, "status": "closed", "observability": observability}
+
+
 
 
 # =========================
@@ -279,6 +326,7 @@ async def audio_stream(ws: WebSocket, meeting_id: str):
         return
 
     stream_key = f"audio:{meeting_id}"
+    add_observability_event(r, meeting_id, "audio_ws.connected")
     print(f"🎧 Client connected (audio) meeting_id={meeting_id}")
 
     counter = 0
@@ -290,6 +338,9 @@ async def audio_stream(ws: WebSocket, meeting_id: str):
 
             audio_bytes = await ws.receive_bytes()
             counter += 1
+            increment_counter(r, meeting_id, "audio_chunks_received_total", 1)
+            increment_counter(r, meeting_id, "audio_bytes_received_total", len(audio_bytes))
+            increment_float_counter(r, meeting_id, "audio_seconds_received_estimated", len(audio_bytes) / 2 / 24000)
 
             if _is_meeting_closed(meeting_id):
                 await ws.close(code=1008)
@@ -301,6 +352,13 @@ async def audio_stream(ws: WebSocket, meeting_id: str):
                 print(f"📥 Received {counter} chunks for {meeting_id}")
 
     except Exception as e:
+        add_observability_event(
+            r,
+            meeting_id,
+            "audio_ws.disconnected",
+            metrics={"chunks_received_on_connection": counter},
+            metadata={"reason": str(e)},
+        )
         print(f"🔌 Disconnected (audio) meeting_id={meeting_id}: {e}")
 
 
@@ -330,6 +388,8 @@ async def unified_ws(ws: WebSocket, meeting_id: str):
         backfill_seconds = 0
     if backfill_seconds > MAX_BACKFILL_SECONDS:
         backfill_seconds = MAX_BACKFILL_SECONDS
+
+    add_observability_event(r, meeting_id, "event_ws.connected", metrics={"backfill_seconds": backfill_seconds})
 
     print(f"🧩 Client connected (unified ws) meeting_id={meeting_id} backfill={backfill_seconds}s")
 

@@ -23,6 +23,7 @@ Você é um copiloto silencioso para conversas ao vivo.
 Seu trabalho é ajudar sem atrapalhar:
 - Priorize explicação de termos técnicos quando surgirem.
 - Só gere "summary" e "key_points" se houver uma mudança clara de assunto, decisão, ou novidade relevante.
+- Preencha "decisions" apenas quando houver decisão/alinhamento explicitamente dito.
 - NÃO repita a transcrição literalmente.
 - NÃO invente fatos, números, nomes ou decisões.
 - Se não houver utilidade clara nova, retorne JSON "vazio" (campos vazios).
@@ -55,6 +56,9 @@ Responda EXATAMENTE no seguinte formato JSON:
   ],
   "actions": [
     "possível ação futura claramente inferida da conversa"
+  ],
+  "decisions": [
+    "decisão ou alinhamento explicitamente dito na conversa"
   ]
 }
 
@@ -62,6 +66,7 @@ Regras:
 - Se não houver novidade relevante: "summary": "" e "key_points": []
 - Se não houver termos: "terms": []
 - Se não houver ações: "actions": []
+- Se não houver decisões explícitas: "decisions": []
 - Não extrapole o que não foi dito. Se faltar contexto, mantenha explicações genéricas.
 - Evite jargões desnecessários.
 """
@@ -75,7 +80,7 @@ Você é um assistente de resposta rápida durante uma conversa ao vivo.
 
 - Responda de forma curta e prática.
 - Se a pergunta for técnica, dê uma definição simples e uma resposta direta.
-- Produza também uma versão "falável" (answer_short) de 1-2 frases.
+- Produza também uma versão "falável" (answer_short) de 1 frase.
 - Se faltar contexto, faça suposições mínimas e marque confiança como "low".
 - Não invente detalhes. Se não souber, diga o que precisaria para responder melhor.
 
@@ -88,8 +93,8 @@ Responda EXATAMENTE assim:
 
 {
   "question": "string",
-  "answer": "string (2-5 frases)",
-  "answer_short": "string (1-2 frases, falável)",
+  "answer": "string (1-3 frases)",
+  "answer_short": "string (1 frase, falável)",
   "confidence": "low|medium|high"
 }
 """
@@ -109,6 +114,7 @@ Contexto recente (últimas falas):
 Tarefa:
 - Extraia termos técnicos novos e explique de forma simples.
 - Só preencha "summary"/"key_points" se houver novidade útil, mudança de tópico, decisão ou alinhamento.
+- Preencha "decisions" quando a fala contiver uma decisão/alinhamento explícito.
 Analise APENAS com base no texto acima.
 """
     return [

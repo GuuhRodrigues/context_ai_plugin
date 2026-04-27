@@ -50,6 +50,22 @@ Objetivo: reduzir envio de silencio para baixar custo.
 4. Ficar em silencio por ~10s.
 5. Confirmar que logs `[VAD] sending audio ...` aparecem durante fala e caem bastante no silencio.
 6. Voltar a falar e confirmar retomada imediata dos logs.
+7. No `report_*.md`, conferir `VAD gating active: yes`, `VAD bypass reason: none` e `VAD estimated savings` maior que zero em trechos de silencio.
+
+## Parte 5: Validacao de observabilidade
+
+1. Encerrar a reuniao pelo botao `Encerrar Reuniao`.
+2. Conferir se foi criada uma pasta em:
+```text
+observability/meetings/{meeting_id}/
+```
+3. Confirmar que existem tres arquivos com timestamp:
+```text
+events_YYYY_MM_DD_HH_MM_SS.jsonl
+metrics_YYYY_MM_DD_HH_MM_SS.json
+report_YYYY_MM_DD_HH_MM_SS.md
+```
+4. Abrir `report_*.md` e validar se aparecem transcricao, custo estimado, tokens, VAD, decisoes e latencias por tipo.
 
 ## Checklist
 
@@ -59,3 +75,4 @@ Objetivo: reduzir envio de silencio para baixar custo.
 - [ ] Token pode ser renovado
 - [ ] Reuniao fecha corretamente
 - [ ] VAD reduz envio em silencio
+- [ ] Arquivos de observabilidade sao gerados apos encerrar

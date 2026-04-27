@@ -39,7 +39,9 @@ By default, the extension connects to `http://localhost:8000`.
 
 - Tries `tabCapture` first, then fallback capture methods.
 - Requests microphone and mixes mic + tab audio.
-- Uses client-side VAD to reduce silence upload (`VAD_*` constants in `popup.js`).
+- Uses client-side VAD to reduce silence upload (`VAD_*` constants in `popup.js`), including initial noise calibration and explicit bypass reporting.
+- Sends VAD/UI latency snapshots to the backend observability endpoint.
 - Reconnects WebSockets automatically on transient failures.
 - Renews token automatically when remaining TTL is below 1 hour.
 - Stores current meeting data in `chrome.storage.local`.
+- Closing a meeting generates JSONL, metrics JSON, and Markdown report files under `observability/meetings/{meeting_id}/`.
