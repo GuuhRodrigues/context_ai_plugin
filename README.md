@@ -35,16 +35,85 @@ This repository currently contains:
 
 ```mermaid
 flowchart LR
-  A[Browser Extension / UI] -->|WS: /audio/:meeting| B[FastAPI API]
-  A -->|WS: /event/:meeting| B
-  B -->|Redis Stream: audio::meeting| R[(Redis)]
-  R -->|Stream consumer| T[transcription_worker]
-  T -->|PubSub: transcript::meeting| R
-  T -->|XADD: events::meeting| R
-  R -->|PubSub: transcript::meeting| I[insights_worker]
-  I -->|PubSub: insights::meeting| R
-  R -->|WS push| B
-  B -->|WS messages| A
+  UI[Browser Extension / UI]
+  API[FastAPI API]
+  REDIS[(Redis)]
+  T[transcription_worker]
+  I[insights_worker]
+
+  UI -->|audio WS| API
+  API -->|audio queue| REDIS
+  REDIS -->|audio chunks| T
+  T -->|transcripts| REDIS
+  REDIS -->|transcripts| I
+  I -->|qa / insights| REDIS
+  REDIS -->|live events| API
+  API -->|event WS| UI
+```
+
+### Main live event flow
+
+```mermaid
+sequenceDiagram
+  participant UI as Browser Extension / UI
+  participant API as FastAPI API
+  participant Audio as Redis Stream audio:meeting_id
+  participant T as transcription_worker
+  participant Transcript as Redis Pub/Sub transcript:meeting_id
+  participant I as insights_worker
+  participant Insights as Redis Pub/Sub insights:meeting_id
+
+  UI->>API: POST /meetings
+  API-->>UI: meeting_id, token, event_url, audio_url
+
+  UI->>API: Open WS /event/:meeting_id
+  Note over API: SUBSCRIBE transcript:meeting_id
+  Note over API: SUBSCRIBE insights:meeting_id
+  Note over I: PSUBSCRIBE transcript:*
+
+  UI->>API: Send audio chunks via WS /audio/:meeting_id
+
+  API->>Audio: XADD audio chunks
+  T->>Audio: XREAD audio chunks
+  T->>Transcript: PUBLISH transcript.completed
+
+  Transcript-->>API: Deliver live transcript.completed
+  API-->>UI: Send transcript.completed via WS /event/:meeting_id
+
+  Transcript-->>I: Deliver live transcript.completed
+  I->>Insights: PUBLISH qa / insight
+  Insights-->>API: Deliver live qa / insight
+  API-->>UI: Send qa / insight via WS /event/:meeting_id
+```
+
+### Report and backfill flow
+
+```mermaid
+sequenceDiagram
+  participant UI as Browser Extension / UI
+  participant API as FastAPI API
+  participant T as transcription_worker
+  participant I as insights_worker
+  participant Events as Redis Stream events:meeting_id
+  participant Report as JSONL / metrics JSON / Markdown report
+
+  Note over UI,Report: 1. Store meeting events while the meeting is running
+  UI->>API: POST /meetings/:meeting_id/observability
+  API->>Events: XADD observability event
+
+  T->>Events: XADD transcript event
+  I->>Events: XADD qa / insight event
+
+  Note over UI,Report: 2. Backfill recent events when the UI connects/reconnects
+  UI->>API: Open WS /event/:meeting_id
+  API->>Events: XRANGE recent events for backfill
+  Events-->>API: Backfill payloads
+  API-->>UI: Send backfill over WS /event/:meeting_id
+
+  Note over UI,Report: 3. Generate local artifacts when the meeting closes
+  UI->>API: POST /meetings/:meeting_id/close
+  API->>Events: Read stored meeting events
+  API->>Report: Generate JSONL, metrics JSON, and Markdown report
 ```
 
 ### Event stream model (UI receives)
@@ -77,50 +146,6 @@ Backfill is replayed from `events:{meeting_id}` and then live events continue vi
   - token is revoked
   - active WS connections are killed (`1008 policy violation`)
   - Redis keys are purged (`audio:*`, `events:*`, `dedup:*`)
-
-### Sequence: create → use → close
-
-```mermaid
-sequenceDiagram
-  participant UI as UI/Plugin
-  participant API as FastAPI
-  participant Redis as Redis
-  participant TR as transcription_worker
-  participant IN as insights_worker
-  participant OpenAI as OpenAI Realtime
-
-  UI->>API: POST /meetings
-  API-->>UI: meeting_id + token + event_url + audio_url
-
-  UI->>API: WS connect /event/{meeting}?token=...
-  API->>Redis: XRANGE events:{meeting} (backfill)
-  Redis-->>API: backfill events
-  API-->>UI: backfill messages
-
-  UI->>API: WS connect /audio/{meeting}?token=...
-  UI->>API: send pcm16 chunks
-  API->>Redis: XADD audio:{meeting} {pcm16}
-
-  TR->>Redis: XREAD audio:{meeting}
-  TR->>OpenAI: Realtime transcription session
-  OpenAI-->>TR: transcript events
-  TR->>Redis: PUBLISH transcript:{meeting}
-  TR->>Redis: XADD events:{meeting} {payload}
-
-  IN->>Redis: SUBSCRIBE transcript:{meeting}
-  IN->>Redis: PUBLISH insights:{meeting}
-  IN->>Redis: XADD events:{meeting} {payload}
-
-  API->>Redis: SUBSCRIBE transcript:{meeting}, insights:{meeting}
-  Redis-->>API: events
-  API-->>UI: live messages
-
-  UI->>API: POST /meetings/{meeting}/close
-  API->>Redis: revoke token + mark closed
-  API->>Redis: DEL audio:{meeting}, events:{meeting}, dedup:{meeting}:*
-  API-->>UI: {status: closed}
-  API-->>UI: WS close 1008 (active connections)
-```
 
 ---
 
