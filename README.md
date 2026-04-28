@@ -13,7 +13,6 @@ This repository currently contains:
 - A FastAPI backend (meeting lifecycle + WebSocket gateways)
 - Background workers (transcription router + insights generation)
 - Browser extension (Chrome/Edge) for real-time meeting copilot
-- Client scripts that simulate the browser extension behavior
 
 ---
 
@@ -24,7 +23,7 @@ This repository currently contains:
 - **Realtime transcription** (OpenAI Realtime API — transcription intent)
 - **Insights generation** (summaries, key terms, action hints)
 - **Question detection + answers (QA)** when the user asks something directly
-- **Unified meeting WebSocket** for UI/plugin: backfill + live stream in one socket
+- **Meeting event WebSocket** for UI/plugin: backfill + live stream in one socket
 - **Multi‑meeting support** with per‑meeting token auth
 - **Meeting lifecycle**: create → use → close → cleanup (Redis purge + session shutdown)
 
@@ -37,7 +36,7 @@ This repository currently contains:
 ```mermaid
 flowchart LR
   A[Browser Extension / UI] -->|WS: /audio/:meeting| B[FastAPI API]
-  A -->|WS: /ws/:meeting| B
+  A -->|WS: /event/:meeting| B
   B -->|Redis Stream: audio::meeting| R[(Redis)]
   R -->|Stream consumer| T[transcription_worker]
   T -->|PubSub: transcript::meeting| R
@@ -50,7 +49,7 @@ flowchart LR
 
 ### Event stream model (UI receives)
 
-The UI receives a single WebSocket stream (`/ws/{meeting_id}`) that can include:
+The UI receives a single WebSocket stream (`/event/{meeting_id}`) that can include:
 
 - `transcript.completed` (final transcript chunk for a spoken turn)
 - `insight` (generated insight payload)
@@ -67,12 +66,12 @@ Backfill is replayed from `events:{meeting_id}` and then live events continue vi
 - A meeting is created using `POST /meetings` which returns:
   - `meeting_id`
   - `token`
-  - `ws_url` (unified websocket)
+  - `event_url` (event websocket)
   - `audio_url` (audio websocket)
   - TTL
 
 - `GET /meetings/{meeting_id}?token=...` returns meeting status (`open`) and `expires_in_seconds` when token is valid; returns 401 otherwise.
-- `POST /meetings/{meeting_id}/refresh` with body `{"token": "..."}` returns a new token and updated `ws_url`/`audio_url`; use it to renew before expiry (e.g. reconnecting or long meetings).
+- `POST /meetings/{meeting_id}/refresh` with body `{"token": "..."}` returns a new token and updated `event_url`/`audio_url`; use it to renew before expiry (e.g. reconnecting or long meetings).
 - All WebSocket routes require `?token=`.
 - On meeting close:
   - token is revoked
@@ -91,9 +90,9 @@ sequenceDiagram
   participant OpenAI as OpenAI Realtime
 
   UI->>API: POST /meetings
-  API-->>UI: meeting_id + token + ws_url + audio_url
+  API-->>UI: meeting_id + token + event_url + audio_url
 
-  UI->>API: WS connect /ws/{meeting}?token=...
+  UI->>API: WS connect /event/{meeting}?token=...
   API->>Redis: XRANGE events:{meeting} (backfill)
   Redis-->>API: backfill events
   API-->>UI: backfill messages
@@ -145,14 +144,6 @@ CONTEXT_AI_PLUGIN/
 │   ├── icons/                  # Extension icons (16x16, 48x48, 128x128)
 │   └── README.md               # Extension setup instructions
 │
-├── client/
-│   ├── __init__.py
-│   ├── audio_sender.py         # Streams microphone audio (PCM16 24kHz)
-│   ├── create_meeting.py       # Creates meeting + token
-│   ├── events_listener.py      # Legacy (split streams) listener
-│   ├── insights_listener.py    # Legacy insights listener
-│   └── unified_ws_listener.py  # Simulates plugin: unified backfill + live stream
-│
 ├── worker/
 │   ├── __init__.py
 │   ├── transcription_worker.py # Multi-meeting realtime transcription router
@@ -191,7 +182,7 @@ CONTEXT_AI_PLUGIN/
 | Variable | Used by | Default | Notes |
 |---|---|---:|---|
 | `OPENAI_API_KEY` | workers | — | Required |
-| `API_BASE_URL` | api | `http://localhost:8000` | Public base URL for `ws_url`/`audio_url` in create/refresh (http→ws, https→wss) |
+| `API_BASE_URL` | api | `http://localhost:8000` | Public base URL for `event_url`/`audio_url` in create/refresh (http→ws, https→wss) |
 | `REDIS_HOST` | api/workers | `localhost` | In Docker: `redis` |
 | `REDIS_PORT` | api/workers | `6379` | — |
 | `MEETING_TOKEN_TTL_SECONDS` | api | `7200` | Token lifetime |
@@ -254,8 +245,6 @@ The files include transcript history, insights, Q&A, VAD metrics, token usage, l
 
 ## 🚀 Run locally (end‑to‑end)
 
-### Opção A: Usar a Browser Extension (recomendado)
-
 1. **Start services**
 
 ```bash
@@ -277,61 +266,6 @@ docker compose up --build
 - A transcrição, insights e Q&A aparecerão em tempo real na popup
 
 Veja `extension/README.md` para mais detalhes.
-
----
-
-### Opção B: Usar scripts client (teste/desenvolvimento)
-
-### 1) Start services
-
-```bash
-docker compose up --build
-```
-
-### 2) Create a meeting (returns meeting_id + token)
-
-```bash
-python client/create_meeting.py
-```
-
-Export the returned values:
-
-```bash
-export MEETING_ID="..."
-export TOKEN="..."
-```
-
-### 3) Start unified listener (simulates the plugin)
-
-```bash
-python client/unified_ws_listener.py
-```
-
-### 4) Start audio streaming
-
-```bash
-python client/audio_sender.py
-```
-
-### 5) Check meeting status (optional)
-
-```bash
-curl "http://localhost:8000/meetings/$MEETING_ID?token=$TOKEN"
-```
-
-### 6) Refresh token (optional, for long meetings)
-
-```bash
-curl -X POST "http://localhost:8000/meetings/$MEETING_ID/refresh" -H "Content-Type: application/json" -d "{\"token\": \"$TOKEN\"}"
-```
-
-Update `TOKEN` (and reconnect WebSockets if needed) with the new token from the response.
-
-### 7) Close meeting (kills active sockets + cleans Redis)
-
-```bash
-curl -X POST "http://localhost:8000/meetings/$MEETING_ID/close"
-```
 
 ---
 
@@ -362,13 +296,11 @@ Expected:
 ### Audio connects then closes with 1008
 This means the meeting is **closed** or the `token` is **invalid/expired**.
 
-- Re-create a meeting with `python client/create_meeting.py`
-- Export the new `MEETING_ID` + `TOKEN`
+- Start a new meeting from the browser extension.
 
 ### No transcripts
 - Check `OPENAI_API_KEY` is set for the `transcription` container.
-- Ensure your microphone works and sample rate is 24kHz.
-- Confirm `audio_sender.py` is pointing to the correct meeting/token.
+- Ensure your microphone/tab audio capture works in the browser extension.
 
 ### Insights not showing
 - Confirm `insights_worker` is running.
@@ -411,8 +343,7 @@ This is an MVP/prototype with production‑oriented boundaries:
 ### How to propose improvements
 - Prefer small, reviewable PRs
 - Preserve streaming behavior and meeting lifecycle
-- Keep clear boundaries: `backend/` vs `worker/` vs `client/`
-- Avoid breaking existing client scripts
+- Keep clear boundaries: `backend/` vs `worker/` vs `extension/`
 
 ### Product goal
 A browser plugin that provides real‑time conversational assistance during meetings.

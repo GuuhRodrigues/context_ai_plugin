@@ -31,7 +31,7 @@ let vadLastSpeechTs = 0;
 let vadLastDebugTs = 0;
 let observabilityState = createObservabilityState();
 
-const STORAGE_KEYS = ['meeting_id', 'token', 'ws_url', 'audio_url'];
+const STORAGE_KEYS = ['meeting_id', 'token', 'event_url', 'audio_url'];
 
 function createObservabilityState() {
   return {
@@ -754,7 +754,7 @@ async function refreshToken() {
     }
 
     currentMeeting.token = data.token;
-    currentMeeting.ws_url = data.ws_url;
+    currentMeeting.event_url = data.event_url;
     currentMeeting.audio_url = data.audio_url;
     await setStoredMeeting(currentMeeting);
 
@@ -1002,7 +1002,7 @@ async function connectEventSocket() {
       eventSocket.close();
     }
 
-    const wsUrl = new URL(currentMeeting.ws_url);
+    const wsUrl = new URL(currentMeeting.event_url);
     eventSocket = new WebSocket(wsUrl.href);
 
     eventSocket.onopen = () => {

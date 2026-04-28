@@ -33,7 +33,7 @@ MEETING_CLOSED_TTL_SECONDS = int(__import__("os").getenv("MEETING_CLOSED_TTL_SEC
 class CreateMeetingResponse(BaseModel):
     meeting_id: str
     token: str
-    ws_url: str
+    event_url: str
     audio_url: str
     expires_in_seconds: int
 
@@ -50,7 +50,7 @@ class RefreshTokenRequest(BaseModel):
 
 class RefreshTokenResponse(BaseModel):
     token: str
-    ws_url: str
+    event_url: str
     audio_url: str
     expires_in_seconds: int
 
@@ -70,6 +70,10 @@ def _ws_base_url() -> str:
     if API_BASE_URL.startswith("https://"):
         return API_BASE_URL.replace("https://", "wss://", 1)
     return API_BASE_URL.replace("http://", "ws://", 1)
+
+
+def _event_ws_url(base: str, meeting_id: str, token: str) -> str:
+    return f"{base}/event/{meeting_id}?token={token}&backfill={DEFAULT_BACKFILL_SECONDS}"
 
 
 def _decode_if_bytes(x: Any) -> Any:
@@ -235,13 +239,13 @@ def create_meeting():
     add_observability_event(r, meeting_id, "meeting.created")
 
     base = _ws_base_url()
-    ws_url = f"{base}/ws/{meeting_id}?token={token}&backfill={DEFAULT_BACKFILL_SECONDS}"
+    event_url = _event_ws_url(base, meeting_id, token)
     audio_url = f"{base}/audio/{meeting_id}?token={token}"
 
     return CreateMeetingResponse(
         meeting_id=meeting_id,
         token=token,
-        ws_url=ws_url,
+        event_url=event_url,
         audio_url=audio_url,
         expires_in_seconds=MEETING_TOKEN_TTL_SECONDS,
     )
@@ -251,7 +255,7 @@ def create_meeting():
 def refresh_meeting_token(meeting_id: str, body: RefreshTokenRequest):
     """
     Renew the meeting token and extend TTL. Requires current valid token.
-    Returns new token and updated ws_url/audio_url. Use the new token for subsequent requests.
+    Returns new token and updated event_url/audio_url. Use the new token for subsequent requests.
     Cannot refresh a closed meeting.
     """
     if _is_meeting_closed(meeting_id):
@@ -265,12 +269,12 @@ def refresh_meeting_token(meeting_id: str, body: RefreshTokenRequest):
     add_observability_event(r, meeting_id, "meeting.token_refreshed")
 
     base = _ws_base_url()
-    ws_url = f"{base}/ws/{meeting_id}?token={new_token}&backfill={DEFAULT_BACKFILL_SECONDS}"
+    event_url = _event_ws_url(base, meeting_id, new_token)
     audio_url = f"{base}/audio/{meeting_id}?token={new_token}"
 
     return RefreshTokenResponse(
         token=new_token,
-        ws_url=ws_url,
+        event_url=event_url,
         audio_url=audio_url,
         expires_in_seconds=MEETING_TOKEN_TTL_SECONDS,
     )
@@ -363,10 +367,10 @@ async def audio_stream(ws: WebSocket, meeting_id: str):
 
 
 # =========================
-# 2) Unified WS (AUTH + backfill + live + kill switch)
+# 2) Event WS (AUTH + backfill + live + kill switch)
 # =========================
-@app.websocket("/ws/{meeting_id}")
-async def unified_ws(ws: WebSocket, meeting_id: str):
+@app.websocket("/event/{meeting_id}")
+async def event_ws(ws: WebSocket, meeting_id: str):
     await ws.accept()
     if not await _ws_require_auth(ws, meeting_id):
         return
@@ -391,7 +395,7 @@ async def unified_ws(ws: WebSocket, meeting_id: str):
 
     add_observability_event(r, meeting_id, "event_ws.connected", metrics={"backfill_seconds": backfill_seconds})
 
-    print(f"🧩 Client connected (unified ws) meeting_id={meeting_id} backfill={backfill_seconds}s")
+    print(f"🧩 Client connected (event ws) meeting_id={meeting_id} backfill={backfill_seconds}s")
 
     # -----------------------
     # Backfill
@@ -458,7 +462,7 @@ async def unified_ws(ws: WebSocket, meeting_id: str):
             await ws.send_text(payload)
 
     except Exception as e:
-        print(f"🔌 Disconnected (unified ws) meeting_id={meeting_id}: {e}")
+        print(f"🔌 Disconnected (event ws) meeting_id={meeting_id}: {e}")
     finally:
         try:
             pubsub.close()
