@@ -13,4 +13,4 @@ wheels/
 .env
 
 # Local observability artifacts
-observability/
+/observability/output/

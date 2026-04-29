@@ -5,7 +5,7 @@
 const API_BASE = 'http://localhost:8000';
 
 // Client-side VAD (voice activity detection) to avoid sending long silence segments.
-const VAD_ENABLED = true;
+const VAD_ENABLED = false;
 const VAD_RMS_THRESHOLD = 0.008;
 const VAD_PEAK_THRESHOLD = 0.03;
 const VAD_HANGOVER_MS = 1200;
@@ -16,7 +16,20 @@ const VAD_DYNAMIC_PEAK_MULTIPLIER = 1.8;
 const VAD_RMS_NOISE_MARGIN = 0.003;
 const VAD_PEAK_NOISE_MARGIN = 0.01;
 const VAD_DEBUG_LOG_EVERY_MS = 10000;
-const OBSERVABILITY_FLUSH_INTERVAL_MS = 30000;
+const OBS = window.ContextObservability;
+const OBSERVABILITY_FLUSH_INTERVAL_MS = OBS.DEFAULT_FLUSH_INTERVAL_MS;
+const VAD_CONFIG = {
+  enabled: VAD_ENABLED,
+  rmsThreshold: VAD_RMS_THRESHOLD,
+  peakThreshold: VAD_PEAK_THRESHOLD,
+  hangoverMs: VAD_HANGOVER_MS,
+  bypassWithoutMic: VAD_BYPASS_WITHOUT_MIC,
+  calibrationMs: VAD_CALIBRATION_MS,
+  dynamicRmsMultiplier: VAD_DYNAMIC_RMS_MULTIPLIER,
+  dynamicPeakMultiplier: VAD_DYNAMIC_PEAK_MULTIPLIER,
+  rmsNoiseMargin: VAD_RMS_NOISE_MARGIN,
+  peakNoiseMargin: VAD_PEAK_NOISE_MARGIN,
+};
 
 let currentMeeting = null;
 let audioSocket = null;
@@ -29,51 +42,12 @@ let mixedSource = null;
 let tokenRefreshInterval = null;
 let vadLastSpeechTs = 0;
 let vadLastDebugTs = 0;
-let observabilityState = createObservabilityState();
+let observabilityState = OBS.createState(VAD_CONFIG);
 
 const STORAGE_KEYS = ['meeting_id', 'token', 'event_url', 'audio_url'];
 
-function createObservabilityState() {
-  return {
-    startedAtEpochMs: Date.now(),
-    lastFlushAtMs: 0,
-    flushInFlight: false,
-    vad: {
-      framesProcessed: 0,
-      framesSent: 0,
-      framesDropped: 0,
-      secondsProcessed: 0,
-      secondsSent: 0,
-      secondsDropped: 0,
-      bytesSent: 0,
-      rmsSum: 0,
-      peakMax: 0,
-      speechDetections: 0,
-      bypassedFrames: 0,
-      gatingActive: false,
-      bypassReason: 'not_started',
-      calibrated: false,
-      calibrationStartedAtMs: null,
-      calibrationCompletedAtMs: null,
-      calibrationFrames: 0,
-      noiseRmsSamples: [],
-      noisePeakSamples: [],
-      noiseRmsFloor: 0,
-      noisePeakFloor: 0,
-      effectiveRmsThreshold: VAD_RMS_THRESHOLD,
-      effectivePeakThreshold: VAD_PEAK_THRESHOLD,
-    },
-    ui: {
-      eventsRendered: 0,
-      serverToUiLatencySumMs: 0,
-      transcriptToUiLatencySumMs: 0,
-      uiRenderLatencySumMs: 0,
-    },
-  };
-}
-
 function resetObservabilityState() {
-  observabilityState = createObservabilityState();
+  observabilityState = OBS.createState(VAD_CONFIG);
 }
 
 // DOM elements
@@ -535,18 +509,6 @@ function formatError(error) {
   return String(error);
 }
 
-function roundMetric(value, digits = 3) {
-  const factor = 10 ** digits;
-  return Math.round((Number(value) || 0) * factor) / factor;
-}
-
-function percentile(values, p) {
-  if (!values || values.length === 0) return 0;
-  const sorted = values.slice().sort((a, b) => a - b);
-  const idx = Math.max(0, Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * p)));
-  return sorted[idx];
-}
-
 function getVadBypassReason() {
   if (!VAD_ENABLED) return 'disabled';
   if (!micStream && VAD_BYPASS_WITHOUT_MIC) return 'no_microphone';
@@ -556,157 +518,22 @@ function getVadBypassReason() {
 function resetVadRuntimeState() {
   vadLastSpeechTs = 0;
   vadLastDebugTs = 0;
-  const vad = observabilityState.vad;
-  vad.bypassedFrames = 0;
-  vad.gatingActive = false;
-  vad.bypassReason = getVadBypassReason() || 'calibrating_noise';
-  vad.calibrated = false;
-  vad.calibrationStartedAtMs = null;
-  vad.calibrationCompletedAtMs = null;
-  vad.calibrationFrames = 0;
-  vad.noiseRmsSamples = [];
-  vad.noisePeakSamples = [];
-  vad.noiseRmsFloor = 0;
-  vad.noisePeakFloor = 0;
-  vad.effectiveRmsThreshold = VAD_RMS_THRESHOLD;
-  vad.effectivePeakThreshold = VAD_PEAK_THRESHOLD;
-}
-
-function finalizeVadCalibration(nowMs) {
-  const vad = observabilityState.vad;
-  const noiseRmsFloor = percentile(vad.noiseRmsSamples, 0.2);
-  const noisePeakFloor = percentile(vad.noisePeakSamples, 0.2);
-
-  vad.noiseRmsFloor = noiseRmsFloor;
-  vad.noisePeakFloor = noisePeakFloor;
-  vad.effectiveRmsThreshold = Math.max(
-    VAD_RMS_THRESHOLD,
-    noiseRmsFloor * VAD_DYNAMIC_RMS_MULTIPLIER + VAD_RMS_NOISE_MARGIN
-  );
-  vad.effectivePeakThreshold = Math.min(
-    0.95,
-    Math.max(VAD_PEAK_THRESHOLD, noisePeakFloor * VAD_DYNAMIC_PEAK_MULTIPLIER + VAD_PEAK_NOISE_MARGIN)
-  );
-  vad.calibrated = true;
-  vad.calibrationCompletedAtMs = nowMs;
-  vad.gatingActive = true;
-  vad.bypassReason = null;
-
-  console.log(
-    `[VAD] calibrated rms_floor=${noiseRmsFloor.toFixed(4)} peak_floor=${noisePeakFloor.toFixed(4)} ` +
-      `rms_threshold=${vad.effectiveRmsThreshold.toFixed(4)} peak_threshold=${vad.effectivePeakThreshold.toFixed(4)}`
-  );
-}
-
-function updateVadCalibration(metrics, nowMs) {
-  const vad = observabilityState.vad;
-  if (vad.calibrated) return true;
-
-  if (vad.calibrationStartedAtMs === null) {
-    vad.calibrationStartedAtMs = nowMs;
-  }
-
-  vad.calibrationFrames += 1;
-  vad.noiseRmsSamples.push(metrics.rms || 0);
-  vad.noisePeakSamples.push(metrics.peak || 0);
-
-  if ((nowMs - vad.calibrationStartedAtMs) >= VAD_CALIBRATION_MS) {
-    finalizeVadCalibration(nowMs);
-    return true;
-  }
-
-  vad.gatingActive = false;
-  vad.bypassReason = 'calibrating_noise';
-  return false;
-}
-
-function recordVadFrame(metrics, sent, durationSeconds, speechDetected, bypassReason = null) {
-  const vad = observabilityState.vad;
-  vad.framesProcessed += 1;
-  vad.secondsProcessed += durationSeconds;
-  vad.rmsSum += metrics.rms || 0;
-  if ((metrics.peak || 0) > vad.peakMax) {
-    vad.peakMax = metrics.peak || 0;
-  }
-  if (speechDetected) {
-    vad.speechDetections += 1;
-  }
-  if (bypassReason && bypassReason !== 'calibrating_noise') {
-    vad.bypassedFrames += 1;
-  }
-
-  if (sent) {
-    vad.framesSent += 1;
-    vad.secondsSent += durationSeconds;
-  } else {
-    vad.framesDropped += 1;
-    vad.secondsDropped += durationSeconds;
-  }
-}
-
-function buildClientObservabilitySnapshot() {
-  const vad = observabilityState.vad;
-  const ui = observabilityState.ui;
-  const durationSeconds = (Date.now() - observabilityState.startedAtEpochMs) / 1000;
-  const avgRms = vad.framesProcessed > 0 ? vad.rmsSum / vad.framesProcessed : 0;
-  const serverToUiAvg = ui.eventsRendered > 0 ? ui.serverToUiLatencySumMs / ui.eventsRendered : null;
-  const transcriptToUiAvg = ui.eventsRendered > 0 ? ui.transcriptToUiLatencySumMs / ui.eventsRendered : null;
-  const uiRenderAvg = ui.eventsRendered > 0 ? ui.uiRenderLatencySumMs / ui.eventsRendered : null;
-
-  return {
-    client_duration_seconds: roundMetric(durationSeconds),
-    vad: {
-      enabled: VAD_ENABLED,
-      gating_active: Boolean(vad.gatingActive),
-      bypass_reason: vad.bypassReason,
-      bypass_without_mic: VAD_BYPASS_WITHOUT_MIC,
-      rms_threshold: VAD_RMS_THRESHOLD,
-      peak_threshold: VAD_PEAK_THRESHOLD,
-      effective_rms_threshold: roundMetric(vad.effectiveRmsThreshold, 6),
-      effective_peak_threshold: roundMetric(vad.effectivePeakThreshold, 6),
-      hangover_ms: VAD_HANGOVER_MS,
-      calibration_ms: VAD_CALIBRATION_MS,
-      calibration_frames: vad.calibrationFrames,
-      calibrated: Boolean(vad.calibrated),
-      noise_rms_floor: roundMetric(vad.noiseRmsFloor, 6),
-      noise_peak_floor: roundMetric(vad.noisePeakFloor, 6),
-      frames_processed: vad.framesProcessed,
-      frames_sent: vad.framesSent,
-      frames_dropped: vad.framesDropped,
-      frames_bypassed: vad.bypassedFrames,
-      seconds_processed: roundMetric(vad.secondsProcessed),
-      seconds_sent: roundMetric(vad.secondsSent),
-      seconds_dropped: roundMetric(vad.secondsDropped),
-      bytes_sent: vad.bytesSent,
-      avg_rms: roundMetric(avgRms, 6),
-      peak_max: roundMetric(vad.peakMax, 6),
-      speech_detections: vad.speechDetections,
-    },
-    ui: {
-      events_rendered: ui.eventsRendered,
-      server_to_ui_avg_ms: serverToUiAvg === null ? null : roundMetric(serverToUiAvg, 2),
-      transcript_to_ui_avg_ms: transcriptToUiAvg === null ? null : roundMetric(transcriptToUiAvg, 2),
-      ui_render_avg_ms: uiRenderAvg === null ? null : roundMetric(uiRenderAvg, 2),
-    },
-  };
+  OBS.resetVadRuntimeState(observabilityState, VAD_CONFIG, getVadBypassReason());
 }
 
 function maybeFlushObservabilitySnapshot(reason = 'periodic') {
-  const now = Date.now();
-  if (!currentMeeting || observabilityState.flushInFlight) return;
-  if (now - observabilityState.lastFlushAtMs < OBSERVABILITY_FLUSH_INTERVAL_MS) return;
-
-  observabilityState.lastFlushAtMs = now;
-  observabilityState.flushInFlight = true;
-  apiRecordObservability('client_snapshot', buildClientObservabilitySnapshot(), { reason })
-    .finally(() => {
-      observabilityState.flushInFlight = false;
-    });
+  OBS.maybeFlushSnapshot(
+    observabilityState,
+    currentMeeting,
+    apiRecordObservability,
+    VAD_CONFIG,
+    reason,
+    OBSERVABILITY_FLUSH_INTERVAL_MS
+  );
 }
 
 async function flushFinalObservabilitySnapshot(reason = 'final') {
-  if (!currentMeeting) return;
-  await apiRecordObservability('client_final_snapshot', buildClientObservabilitySnapshot(), { reason });
+  await OBS.flushFinalSnapshot(observabilityState, currentMeeting, apiRecordObservability, VAD_CONFIG, reason);
 }
 
 // Stop meeting
@@ -849,12 +676,12 @@ function shouldSendAudioFrame(frame, nowMs, frameDurationSeconds) {
     const vad = observabilityState.vad;
     vad.gatingActive = false;
     vad.bypassReason = bypassReason;
-    recordVadFrame(metrics, true, frameDurationSeconds, staticSpeechDetected, bypassReason);
+    OBS.recordVadFrame(observabilityState, metrics, true, frameDurationSeconds, staticSpeechDetected, bypassReason);
     return true;
   }
 
-  if (!updateVadCalibration(metrics, nowMs)) {
-    recordVadFrame(metrics, true, frameDurationSeconds, staticSpeechDetected, 'calibrating_noise');
+  if (!OBS.updateVadCalibration(observabilityState, VAD_CONFIG, metrics, nowMs)) {
+    OBS.recordVadFrame(observabilityState, metrics, true, frameDurationSeconds, staticSpeechDetected, 'calibrating_noise');
     return true;
   }
 
@@ -873,7 +700,7 @@ function shouldSendAudioFrame(frame, nowMs, frameDurationSeconds) {
 
   const inHangover = (nowMs - vadLastSpeechTs) <= VAD_HANGOVER_MS;
   const shouldSend = speechDetected || inHangover;
-  recordVadFrame(metrics, shouldSend, frameDurationSeconds, speechDetected);
+  OBS.recordVadFrame(observabilityState, metrics, shouldSend, frameDurationSeconds, speechDetected);
 
   if (shouldSend && (nowMs - vadLastDebugTs) >= VAD_DEBUG_LOG_EVERY_MS) {
     console.log(
@@ -1017,7 +844,15 @@ async function connectEventSocket() {
         const data = JSON.parse(event.data);
         const handledKind = handleEvent(data);
         const renderDurationMs = performance.now() - renderStartMs;
-        recordUiLatency(data, handledKind, receivedAtEpochMs, Date.now(), renderDurationMs);
+        OBS.recordUiLatency(
+          observabilityState,
+          data,
+          handledKind,
+          receivedAtEpochMs,
+          Date.now(),
+          renderDurationMs,
+          apiRecordObservability
+        );
       } catch (error) {
         console.error('Error parsing event:', error);
       }
@@ -1052,62 +887,6 @@ function closeEventSocket() {
     eventSocket.close();
     eventSocket = null;
   }
-}
-
-function getEventTimestampMs(data) {
-  if (!data || typeof data !== 'object') return null;
-  if (data.timings && typeof data.timings.published_at_ms === 'number') {
-    return data.timings.published_at_ms;
-  }
-  if (typeof data.ts_ms === 'number') {
-    return data.ts_ms;
-  }
-  if (typeof data.ts === 'number') {
-    return data.ts * 1000;
-  }
-  return null;
-}
-
-function getTranscriptCompletedTimestampMs(data) {
-  if (!data || typeof data !== 'object' || !data.timings) return null;
-  if (typeof data.timings.transcript_completed_at_ms === 'number') {
-    return data.timings.transcript_completed_at_ms;
-  }
-  if (typeof data.timings.transcript_event_received_at_ms === 'number') {
-    return data.timings.transcript_event_received_at_ms;
-  }
-  return null;
-}
-
-function recordUiLatency(data, handledKind, receivedAtEpochMs, renderedAtEpochMs, renderDurationMs) {
-  if (!handledKind) return;
-
-  const serverEventAtMs = getEventTimestampMs(data);
-  const transcriptCompletedAtMs = getTranscriptCompletedTimestampMs(data);
-  const serverToUiMs = serverEventAtMs ? receivedAtEpochMs - serverEventAtMs : null;
-  const transcriptToUiMs = transcriptCompletedAtMs ? renderedAtEpochMs - transcriptCompletedAtMs : null;
-
-  observabilityState.ui.eventsRendered += 1;
-  if (serverToUiMs !== null && serverToUiMs >= 0) {
-    observabilityState.ui.serverToUiLatencySumMs += serverToUiMs;
-  }
-  if (transcriptToUiMs !== null && transcriptToUiMs >= 0) {
-    observabilityState.ui.transcriptToUiLatencySumMs += transcriptToUiMs;
-  }
-  observabilityState.ui.uiRenderLatencySumMs += renderDurationMs;
-
-  apiRecordObservability(
-    'ui_event_latency',
-    {
-      event_kind: handledKind,
-      server_to_ui_ms: serverToUiMs === null ? null : roundMetric(serverToUiMs, 2),
-      transcript_to_ui_ms: transcriptToUiMs === null ? null : roundMetric(transcriptToUiMs, 2),
-      ui_render_ms: roundMetric(renderDurationMs, 2),
-    },
-    {
-      source_item_id: data.item_id || data.source_item_id || null,
-    }
-  );
 }
 
 function escapeHtml(str) {

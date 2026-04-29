@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import threading
 import time
@@ -13,83 +12,48 @@ from dataclasses import dataclass, field
 from typing import Any, Deque, Dict, Optional, Set, Tuple
 
 import redis
-import requests
 
-from backend.observability import now_ms as obs_now_ms
-from worker.prompts import build_insights_prompt, build_qa_prompt
-
-# -----------------------
-# Env / config
-# -----------------------
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-
-MODEL = os.getenv("INSIGHTS_MODEL", "gpt-4o-mini")
-INSIGHTS_MAX_OUTPUT_TOKENS = int(os.getenv("INSIGHTS_MAX_OUTPUT_TOKENS", "180"))
-QA_MAX_OUTPUT_TOKENS = int(os.getenv("QA_MAX_OUTPUT_TOKENS", "220"))
-INSIGHTS_INPUT_COST_PER_1M_USD = float(os.getenv("INSIGHTS_INPUT_COST_PER_1M_USD", "0.15"))
-INSIGHTS_OUTPUT_COST_PER_1M_USD = float(os.getenv("INSIGHTS_OUTPUT_COST_PER_1M_USD", "0.60"))
-
-HISTORY_MAXLEN = int(os.getenv("INSIGHTS_HISTORY_MAXLEN", "12"))
-CONTEXT_TAKE_LAST = int(os.getenv("INSIGHTS_CONTEXT_TAKE_LAST", "8"))
-
-MIN_UTTERANCE_CHARS = int(os.getenv("INSIGHTS_MIN_UTTERANCE_CHARS", "12"))
-MIN_NEW_TOKENS = int(os.getenv("INSIGHTS_MIN_NEW_TOKENS", "8"))
-CONTEXT_SIMILARITY_THRESHOLD = float(os.getenv("INSIGHTS_CONTEXT_SIMILARITY_THRESHOLD", "0.85"))
-SUMMARY_TOPIC_SHIFT_THRESHOLD = float(os.getenv("INSIGHTS_SUMMARY_TOPIC_SHIFT_THRESHOLD", "0.75"))
-
-ACRONYM_MIN_LEN = int(os.getenv("INSIGHTS_ACRONYM_MIN_LEN", "2"))
-ACRONYM_MAX_LEN = int(os.getenv("INSIGHTS_ACRONYM_MAX_LEN", "10"))
-
-QUESTION_FORCE_MODEL = os.getenv("INSIGHTS_QUESTION_FORCE_MODEL", "true").lower() in ("1", "true", "yes")
-QUESTION_MIN_LEN = int(os.getenv("INSIGHTS_QUESTION_MIN_LEN", "8"))
-QUESTION_MIN_WORDS = int(os.getenv("INSIGHTS_QUESTION_MIN_WORDS", "4"))
-QA_MIN_INTERVAL_SECONDS = float(os.getenv("INSIGHTS_QA_MIN_INTERVAL_SECONDS", "1.5"))
-QUESTION_ASSEMBLY_WINDOW_SECONDS = float(os.getenv("INSIGHTS_QUESTION_ASSEMBLY_WINDOW_SECONDS", "5.0"))
-QUESTION_ASSEMBLY_MAX_PARTS = int(os.getenv("INSIGHTS_QUESTION_ASSEMBLY_MAX_PARTS", "4"))
-QA_WORKERS = int(os.getenv("INSIGHTS_QA_WORKERS", "2"))
-INSIGHT_WORKERS = int(os.getenv("INSIGHTS_INSIGHT_WORKERS", "1"))
-INSIGHTS_PENDING_LIMIT_PER_MEETING = int(os.getenv("INSIGHTS_PENDING_LIMIT_PER_MEETING", "1"))
-INSIGHTS_BACKGROUND_DELAY_SECONDS = float(os.getenv("INSIGHTS_BACKGROUND_DELAY_SECONDS", "0.5"))
-
-DEDUP_TTL_SECONDS = int(os.getenv("INSIGHTS_DEDUP_TTL_SECONDS", "120"))
-QA_TTL_SECONDS = int(os.getenv("INSIGHTS_QA_TTL_SECONDS", str(DEDUP_TTL_SECONDS)))
-TERMS_TTL_SECONDS = int(os.getenv("INSIGHTS_TERMS_TTL_SECONDS", str(DEDUP_TTL_SECONDS)))
-
-EVENTS_STREAM_MAXLEN = int(os.getenv("EVENTS_STREAM_MAXLEN", "5000"))
-
-# how long to keep meeting state without new transcripts
-MEETING_STATE_IDLE_SECONDS = float(os.getenv("INSIGHTS_MEETING_STATE_IDLE_SECONDS", "600"))
-
-
-# -----------------------
-# Redis helpers
-# -----------------------
-def redis_client() -> redis.Redis:
-    return redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
-
-
-def insights_channel(meeting_id: str) -> str:
-    return f"insights:{meeting_id}"
-
-
-def events_stream(meeting_id: str) -> str:
-    return f"events:{meeting_id}"
-
-
-def now_ts() -> int:
-    return int(time.time())
-
-
-def add_event_to_stream(r: redis.Redis, meeting_id: str, payload: Dict[str, Any]) -> None:
-    try:
-        s = json.dumps(payload, ensure_ascii=False)
-        r.xadd(events_stream(meeting_id), {"payload": s}, maxlen=EVENTS_STREAM_MAXLEN, approximate=True)
-    except Exception:
-        pass
+from core.backend.configs import (
+    INSIGHTS_ACRONYM_MAX_LEN as ACRONYM_MAX_LEN,
+    INSIGHTS_ACRONYM_MIN_LEN as ACRONYM_MIN_LEN,
+    INSIGHTS_BACKGROUND_DELAY_SECONDS,
+    INSIGHTS_CONTEXT_SIMILARITY_THRESHOLD as CONTEXT_SIMILARITY_THRESHOLD,
+    INSIGHTS_CONTEXT_TAKE_LAST as CONTEXT_TAKE_LAST,
+    INSIGHTS_DEDUP_TTL_SECONDS as DEDUP_TTL_SECONDS,
+    INSIGHTS_HISTORY_MAXLEN as HISTORY_MAXLEN,
+    INSIGHTS_INSIGHT_WORKERS as INSIGHT_WORKERS,
+    INSIGHTS_MAX_OUTPUT_TOKENS,
+    INSIGHTS_MEETING_STATE_IDLE_SECONDS as MEETING_STATE_IDLE_SECONDS,
+    INSIGHTS_MIN_NEW_TOKENS as MIN_NEW_TOKENS,
+    INSIGHTS_MIN_UTTERANCE_CHARS as MIN_UTTERANCE_CHARS,
+    INSIGHTS_MODEL as MODEL,
+    INSIGHTS_PENDING_LIMIT_PER_MEETING,
+    INSIGHTS_QA_MIN_INTERVAL_SECONDS as QA_MIN_INTERVAL_SECONDS,
+    INSIGHTS_QA_TTL_SECONDS as QA_TTL_SECONDS,
+    INSIGHTS_QA_WORKERS as QA_WORKERS,
+    INSIGHTS_QUESTION_ASSEMBLY_MAX_PARTS as QUESTION_ASSEMBLY_MAX_PARTS,
+    INSIGHTS_QUESTION_ASSEMBLY_WINDOW_SECONDS as QUESTION_ASSEMBLY_WINDOW_SECONDS,
+    INSIGHTS_QUESTION_FORCE_MODEL as QUESTION_FORCE_MODEL,
+    INSIGHTS_QUESTION_MIN_LEN as QUESTION_MIN_LEN,
+    INSIGHTS_QUESTION_MIN_WORDS as QUESTION_MIN_WORDS,
+    INSIGHTS_SUMMARY_TOPIC_SHIFT_THRESHOLD as SUMMARY_TOPIC_SHIFT_THRESHOLD,
+    INSIGHTS_TERMS_TTL_SECONDS as TERMS_TTL_SECONDS,
+    OPENAI_API_KEY,
+    QA_MAX_OUTPUT_TOKENS,
+)
+from observability.backend.observability import now_ms as obs_now_ms
+from core.backend.src.services.openai import openai_chat
+from core.backend.src.services.redis import (
+    add_event_to_stream,
+    insights_channel,
+    now_ts,
+    publish_json,
+    redis_client,
+    redis_dedup_key,
+    redis_setnx_ttl,
+    transcript_pattern,
+)
+from core.backend.src.worker.prompts import build_insights_prompt, build_qa_prompt
 
 
 def event_ts_ms(evt: Dict[str, Any]) -> Optional[int]:
@@ -153,47 +117,6 @@ def add_ai_call_event(
         },
     }
     add_event_to_stream(r, meeting_id, payload)
-
-
-# -----------------------
-# OpenAI
-# -----------------------
-def estimate_chat_cost_usd(usage: Dict[str, Any]) -> float:
-    prompt_tokens = int(usage.get("prompt_tokens") or 0)
-    completion_tokens = int(usage.get("completion_tokens") or 0)
-    input_cost = (prompt_tokens / 1_000_000) * INSIGHTS_INPUT_COST_PER_1M_USD
-    output_cost = (completion_tokens / 1_000_000) * INSIGHTS_OUTPUT_COST_PER_1M_USD
-    return input_cost + output_cost
-
-
-def openai_chat(messages: list[dict], max_tokens: Optional[int] = None) -> Dict[str, Any]:
-    if not OPENAI_API_KEY:
-        raise RuntimeError("OPENAI_API_KEY ausente")
-
-    url = f"{OPENAI_BASE_URL}/chat/completions"
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-    payload = {
-        "model": MODEL,
-        "messages": messages,
-        "temperature": 0.3,
-        "response_format": {"type": "json_object"},
-    }
-    if max_tokens and max_tokens > 0:
-        payload["max_tokens"] = max_tokens
-
-    started = time.perf_counter()
-    resp = requests.post(url, headers=headers, json=payload, timeout=45)
-    latency_ms = round((time.perf_counter() - started) * 1000, 2)
-    resp.raise_for_status()
-    data = resp.json()
-    usage = data.get("usage") or {}
-    return {
-        "content": data["choices"][0]["message"]["content"],
-        "usage": usage,
-        "model": data.get("model") or MODEL,
-        "latency_ms": latency_ms,
-        "estimated_cost_usd": estimate_chat_cost_usd(usage),
-    }
 
 
 def safe_parse_json(text: str) -> Dict[str, Any]:
@@ -492,17 +415,6 @@ def is_effectively_empty_insights(insights: Dict[str, Any]) -> bool:
     return not summary and not key_points and not terms and not actions and not decisions
 
 
-def redis_dedup_key(meeting_id: str, prefix: str, value_hash: str) -> str:
-    return f"dedup:{meeting_id}:{prefix}:{value_hash}"
-
-
-def redis_setnx_ttl(r: redis.Redis, key: str, ttl: int) -> bool:
-    try:
-        return bool(r.set(key, "1", nx=True, ex=ttl))
-    except Exception:
-        return True
-
-
 def filter_terms_with_ttl(r: redis.Redis, meeting_id: str, terms: list[dict]) -> Tuple[list[dict], int]:
     kept: list[dict] = []
     removed = 0
@@ -595,7 +507,7 @@ def process_qa_task(
                     "published_at_ms": published_at_ms,
                 },
             }
-            r.publish(insights_channel(meeting_id), json.dumps(payload, ensure_ascii=False))
+            publish_json(r, insights_channel(meeting_id), payload)
             add_event_to_stream(r, meeting_id, payload)
             output_status = "fallback_published" if used_fallback else "published"
         else:
@@ -743,7 +655,7 @@ def process_insight_task(
             },
         }
 
-        r.publish(insights_channel(meeting_id), json.dumps(payload, ensure_ascii=False))
+        publish_json(r, insights_channel(meeting_id), payload)
         add_event_to_stream(r, meeting_id, payload)
         add_ai_call_event(
             r,
@@ -789,7 +701,7 @@ def main():
     pubsub = r.pubsub()
 
     # Pattern subscribe all meetings transcripts
-    pubsub.psubscribe("transcript:*")
+    pubsub.psubscribe(transcript_pattern())
 
     meetings: Dict[str, PerMeeting] = {}
 

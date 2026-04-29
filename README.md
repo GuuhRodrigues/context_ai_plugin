@@ -154,32 +154,39 @@ Backfill is replayed from `events:{meeting_id}` and then live events continue vi
 ```text
 CONTEXT_AI_PLUGIN/
 │
-├── backend/
-│   ├── config.py               # Environment configuration
-│   ├── main.py                 # FastAPI server (meetings, websockets, auth, lifecycle)
-│   └── requirements.txt
+├── core/
+│   ├── backend/
+│   │   ├── main.py             # FastAPI server (meetings, websockets, auth, lifecycle)
+│   │   ├── configs.py          # Shared backend configuration
+│   │   ├── src/
+│   │   │   ├── services/
+│   │   │   │   ├── redis.py
+│   │   │   │   ├── openai.py
+│   │   │   │   ├── meeting.py
+│   │   │   │   └── websocket.py
+│   │   │   └── worker/
+│   │   │       ├── transcription_worker.py
+│   │   │       ├── insights_worker.py
+│   │   │       └── prompts.py
+│   ├── extension/
+│   │   ├── manifest.json       # Chrome extension manifest (V3)
+│   │   ├── backend/
+│   │   │   └── background.js   # Extension service worker
+│   │   ├── frontend/
+│   │   │   ├── popup.html
+│   │   │   ├── popup.js
+│   │   │   ├── content.js
+│   │   │   ├── styles.css
+│   │   │   └── icons/
+│   │   ├── observability/
+│   │   │   └── observability.js
+│   │   └── README.md
 │
-├── extension/
-│   ├── manifest.json           # Chrome extension manifest (V3)
-│   ├── background.js           # Minimal service worker (side panel behavior)
-│   ├── popup.html              # Extension popup UI
-│   ├── popup.js                # Popup logic (audio capture, WebSocket, UI)
-│   ├── content.js              # Content script (placeholder for future overlay)
-│   ├── styles.css              # Popup styles
-│   ├── icons/                  # Extension icons (16x16, 48x48, 128x128)
-│   └── README.md               # Extension setup instructions
-│
-├── worker/
-│   ├── __init__.py
-│   ├── transcription_worker.py # Multi-meeting realtime transcription router
-│   ├── insights_worker.py      # Generates insights + QA
-│   └── prompts.py              # Centralized AI prompts
-│
-├── observability/              # Local generated reports (gitignored)
-│   └── meetings/{meeting_id}/
-│       ├── events_YYYY_MM_DD_HH_MM_SS.jsonl
-│       ├── metrics_YYYY_MM_DD_HH_MM_SS.json
-│       └── report_YYYY_MM_DD_HH_MM_SS.md
+├── observability/
+│   ├── backend/
+│   │   └── observability.py
+│   └── output/                 # Local generated reports (gitignored)
+│       └── meetings/data_YYYY_MM_DD_HH_MM_SS/{meeting_id}/
 │
 ├── docker-compose.yml
 ├── Dockerfile
@@ -202,48 +209,22 @@ CONTEXT_AI_PLUGIN/
 
 ## 🔧 Configuration
 
-### Environment variables
+### Backend configs
 
-| Variable | Used by | Default | Notes |
-|---|---|---:|---|
-| `OPENAI_API_KEY` | workers | — | Required |
-| `API_BASE_URL` | api | `http://localhost:8000` | Public base URL for `event_url`/`audio_url` in create/refresh (http→ws, https→wss) |
-| `REDIS_HOST` | api/workers | `localhost` | In Docker: `redis` |
-| `REDIS_PORT` | api/workers | `6379` | — |
-| `MEETING_TOKEN_TTL_SECONDS` | api | `7200` | Token lifetime |
-| `MEETING_CLOSED_TTL_SECONDS` | api | `7200` | Closed flag retention |
-| `OBSERVABILITY_ROOT` | api | `observability/meetings` | Local folder for post-meeting artifacts |
-| `TRANSCRIPTION_COST_PER_MINUTE_USD` | api | `0.003` | Estimated transcription cost used in reports |
-| `INSIGHTS_MODEL` | insights_worker | `gpt-4o-mini` | Chat model |
-| `INSIGHTS_INPUT_COST_PER_1M_USD` | insights_worker | `0.15` | Estimated input token cost for reports |
-| `INSIGHTS_OUTPUT_COST_PER_1M_USD` | insights_worker | `0.60` | Estimated output token cost for reports |
-| `INSIGHTS_MAX_OUTPUT_TOKENS` | insights_worker | `180` | Max output tokens per insights call |
-| `QA_MAX_OUTPUT_TOKENS` | insights_worker | `220` | Max output tokens per QA call |
-| `INSIGHTS_QA_WORKERS` | insights_worker | `2` | Dedicated worker threads for Q&A so answers are not blocked by insights |
-| `INSIGHTS_INSIGHT_WORKERS` | insights_worker | `1` | Worker threads for insights generation |
-| `INSIGHTS_PENDING_LIMIT_PER_MEETING` | insights_worker | `1` | Caps queued insights per meeting to avoid stale backlog |
-| `INSIGHTS_BACKGROUND_DELAY_SECONDS` | insights_worker | `0.5` | Small delay before insight calls; Q&A remains priority |
-| `INSIGHTS_QUESTION_MIN_WORDS` | insights_worker | `4` | Ignore very short/non-actionable questions |
-| `INSIGHTS_QUESTION_ASSEMBLY_WINDOW_SECONDS` | insights_worker | `5.0` | Join nearby short transcript chunks before Q&A |
-| `INSIGHTS_QUESTION_ASSEMBLY_MAX_PARTS` | insights_worker | `4` | Max chunks to join for a fragmented question |
-| `INSIGHTS_QA_MIN_INTERVAL_SECONDS` | insights_worker | `1.5` | Minimum interval between QA publishes per meeting |
-| `INSIGHTS_HISTORY_MAXLEN` | insights_worker | `12` | Rolling window |
-| `INSIGHTS_CONTEXT_TAKE_LAST` | insights_worker | `8` | Context slice |
-| `INSIGHTS_DEDUP_TTL_SECONDS` | insights_worker | `120` | TTL for dedup of repeated insight payloads |
-| `INSIGHTS_MIN_NEW_TOKENS` | insights_worker | `8` | Minimum context novelty to trigger insight call |
-| `INSIGHTS_CONTEXT_SIMILARITY_THRESHOLD` | insights_worker | `0.85` | Lower values reduce insight frequency |
-| `MAX_ACTIVE_MEETINGS` | transcription_worker | `8` | Router capacity |
-| `MEETING_IDLE_TIMEOUT_SECONDS` | transcription_worker | `30` | Auto stop |
-| `OBSERVABILITY_STORE_TRANSCRIPT_DELTAS` | transcription_worker | `false` | Store `transcript.delta` in JSONL only when debugging |
-| `TURN_DETECTION_THRESHOLD` | transcription_worker | `0.5` | Realtime server VAD sensitivity |
-| `TURN_PREFIX_PADDING_MS` | transcription_worker | `250` | Leading audio kept per turn |
-| `TURN_SILENCE_DURATION_MS` | transcription_worker | `700` | Silence needed to finalize a turn (lower = faster, higher = less fragmented) |
+Non-sensitive backend values now live in `core/backend/configs.py`, grouped by subject:
 
-> Tip: to reduce model cost, tune `INSIGHTS_MIN_NEW_TOKENS` up and `INSIGHTS_CONTEXT_SIMILARITY_THRESHOLD` down.
+- `Config to Redis`
+- `Config to API`
+- `Config to OpenAI`
+- `Config to Transcription`
+- `Config to Insights`
+- `Config to Observability`
+
+Only `OPENAI_API_KEY` should come from the environment or `.env`.
 
 ### Extension audio upload (VAD)
 
-The extension uses client-side VAD in `extension/popup.js` and only sends frames when speech is detected (plus a short hangover window):
+The extension uses client-side VAD in `core/extension/frontend/popup.js` and only sends frames when speech is detected (plus a short hangover window):
 
 - `VAD_ENABLED`
 - `VAD_RMS_THRESHOLD`
@@ -259,12 +240,12 @@ The report shows whether VAD gating was really active, why it was bypassed, the 
 When a meeting is closed, the API writes local artifacts before purging Redis:
 
 ```text
-observability/meetings/{meeting_id}/events_YYYY_MM_DD_HH_MM_SS.jsonl
-observability/meetings/{meeting_id}/metrics_YYYY_MM_DD_HH_MM_SS.json
-observability/meetings/{meeting_id}/report_YYYY_MM_DD_HH_MM_SS.md
+observability/output/meetings/data_YYYY_MM_DD_HH_MM_SS/{meeting_id}/events_YYYY_MM_DD_HH_MM_SS.jsonl
+observability/output/meetings/data_YYYY_MM_DD_HH_MM_SS/{meeting_id}/metrics_YYYY_MM_DD_HH_MM_SS.json
+observability/output/meetings/data_YYYY_MM_DD_HH_MM_SS/{meeting_id}/report_YYYY_MM_DD_HH_MM_SS.md
 ```
 
-The files include transcript history, insights, Q&A, VAD metrics, token usage, latency summaries, and estimated cost. The Docker Compose API service mounts `./observability` into the container so these files remain available on the host.
+The files include transcript history, insights, Q&A, VAD metrics, token usage, latency summaries, and estimated cost. The Docker Compose API service mounts `./observability/output` into the container so these files remain available on the host.
 
 ---
 
@@ -281,7 +262,7 @@ docker compose up --build
 - Abra Chrome/Edge e vá para `chrome://extensions/` (ou `edge://extensions/`)
 - Ative "Modo do desenvolvedor"
 - Clique em "Carregar sem compactação"
-- Selecione a pasta `extension/` deste repositório
+- Selecione a pasta `core/extension/` deste repositório
 
 3. **Usar a extensão**
 
@@ -290,7 +271,7 @@ docker compose up --build
 - Permita acesso ao microfone quando solicitado
 - A transcrição, insights e Q&A aparecerão em tempo real na popup
 
-Veja `extension/README.md` para mais detalhes.
+Veja `core/extension/README.md` para mais detalhes.
 
 ---
 
@@ -329,8 +310,8 @@ This means the meeting is **closed** or the `token` is **invalid/expired**.
 
 ### Insights not showing
 - Confirm `insights_worker` is running.
-- Verify `INSIGHTS_MODEL` and API key.
-- Check `INSIGHTS_DEDUP_TTL_SECONDS`, `INSIGHTS_MIN_NEW_TOKENS` and `INSIGHTS_CONTEXT_SIMILARITY_THRESHOLD`.
+- Verify `INSIGHTS_MODEL` in `core/backend/configs.py` and the API key.
+- Check `INSIGHTS_DEDUP_TTL_SECONDS`, `INSIGHTS_MIN_NEW_TOKENS` and `INSIGHTS_CONTEXT_SIMILARITY_THRESHOLD` in `core/backend/configs.py`.
 
 ---
 
@@ -368,7 +349,7 @@ This is an MVP/prototype with production‑oriented boundaries:
 ### How to propose improvements
 - Prefer small, reviewable PRs
 - Preserve streaming behavior and meeting lifecycle
-- Keep clear boundaries: `backend/` vs `worker/` vs `extension/`
+- Keep clear boundaries: `core/backend/src/` vs `core/extension/` vs `observability/`
 
 ### Product goal
 A browser plugin that provides real‑time conversational assistance during meetings.

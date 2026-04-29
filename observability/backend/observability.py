@@ -1,18 +1,15 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 import unicodedata
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Optional
 
 import redis
 
-OBSERVABILITY_ROOT = Path(os.getenv("OBSERVABILITY_ROOT", "observability/meetings"))
-TRANSCRIPTION_COST_PER_MINUTE_USD = float(os.getenv("TRANSCRIPTION_COST_PER_MINUTE_USD", "0.003"))
+from core.backend.configs import OBSERVABILITY_ROOT, TRANSCRIPTION_COST_PER_MINUTE_USD
 
 _word_re = re.compile(r"\S+")
 _decision_markers = (
@@ -794,7 +791,7 @@ def write_meeting_artifacts(
     metrics: dict[str, Any],
 ) -> dict[str, str]:
     ts = filename_timestamp()
-    meeting_dir = OBSERVABILITY_ROOT / meeting_id
+    meeting_dir = OBSERVABILITY_ROOT / f"data_{ts}" / meeting_id
     meeting_dir.mkdir(parents=True, exist_ok=True)
 
     events_path = meeting_dir / f"events_{ts}.jsonl"

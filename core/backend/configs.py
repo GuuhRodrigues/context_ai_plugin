@@ -1,0 +1,88 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+# -----------------------
+# Config to Redis
+# -----------------------
+REDIS_HOST = "redis"
+REDIS_PORT = 6379
+EVENTS_STREAM_MAXLEN = 5000
+AUDIO_STREAM_MAXLEN = 5000
+
+# -----------------------
+# Config to API
+# -----------------------
+# Public base URL for API (used in event_url/audio_url in create_meeting and refresh).
+# Examples: http://localhost:8000, https://api.example.com
+# WebSocket URLs are derived: http->ws, https->wss.
+API_BASE_URL = "http://localhost:8000"
+DEFAULT_BACKFILL_SECONDS = 60
+MAX_BACKFILL_SECONDS = 600
+MEETING_TOKEN_TTL_SECONDS = 7200
+MEETING_CLOSED_TTL_SECONDS = 7200
+
+# -----------------------
+# Config to Secrets
+# -----------------------
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+
+# -----------------------
+# Config to OpenAI
+# -----------------------
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime?intent=transcription"
+
+# -----------------------
+# Config to Transcription
+# -----------------------
+TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe"
+TRANSCRIBE_LANGUAGE = "pt"
+TRANSCRIPTION_SAMPLE_RATE = 24000
+TURN_DETECTION_THRESHOLD = 0.5
+TURN_PREFIX_PADDING_MS = 250
+TURN_SILENCE_DURATION_MS = 700
+AUDIO_SCAN_INTERVAL_SECONDS = 1.0
+AUDIO_STREAM_READ_COUNT = 10
+AUDIO_STREAM_READ_BLOCK_MS = 1000
+OBSERVABILITY_STORE_TRANSCRIPT_DELTAS = False
+MEETING_IDLE_TIMEOUT_SECONDS = 120
+MAX_ACTIVE_MEETINGS = 3
+
+# -----------------------
+# Config to Insights
+# -----------------------
+INSIGHTS_MODEL = "gpt-4o-mini"
+INSIGHTS_MAX_OUTPUT_TOKENS = 180
+QA_MAX_OUTPUT_TOKENS = 220
+INSIGHTS_INPUT_COST_PER_1M_USD = 0.15
+INSIGHTS_OUTPUT_COST_PER_1M_USD = 0.60
+INSIGHTS_HISTORY_MAXLEN = 12
+INSIGHTS_CONTEXT_TAKE_LAST = 8
+INSIGHTS_MIN_UTTERANCE_CHARS = 12
+INSIGHTS_MIN_NEW_TOKENS = 8
+INSIGHTS_CONTEXT_SIMILARITY_THRESHOLD = 0.85
+INSIGHTS_SUMMARY_TOPIC_SHIFT_THRESHOLD = 0.75
+INSIGHTS_ACRONYM_MIN_LEN = 2
+INSIGHTS_ACRONYM_MAX_LEN = 10
+INSIGHTS_QUESTION_FORCE_MODEL = True
+INSIGHTS_QUESTION_MIN_LEN = 8
+INSIGHTS_QUESTION_MIN_WORDS = 4
+INSIGHTS_QA_MIN_INTERVAL_SECONDS = 1.5
+INSIGHTS_QUESTION_ASSEMBLY_WINDOW_SECONDS = 5.0
+INSIGHTS_QUESTION_ASSEMBLY_MAX_PARTS = 4
+INSIGHTS_QA_WORKERS = 2
+INSIGHTS_INSIGHT_WORKERS = 1
+INSIGHTS_PENDING_LIMIT_PER_MEETING = 1
+INSIGHTS_BACKGROUND_DELAY_SECONDS = 0.5
+INSIGHTS_DEDUP_TTL_SECONDS = 120
+INSIGHTS_QA_TTL_SECONDS = INSIGHTS_DEDUP_TTL_SECONDS
+INSIGHTS_TERMS_TTL_SECONDS = INSIGHTS_DEDUP_TTL_SECONDS
+INSIGHTS_MEETING_STATE_IDLE_SECONDS = 600
+
+# -----------------------
+# Config to Observability
+# -----------------------
+OBSERVABILITY_ROOT = Path("observability/output/meetings")
+TRANSCRIPTION_COST_PER_MINUTE_USD = 0.003

@@ -5,15 +5,8 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
-    environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - MEETING_TOKEN_TTL_SECONDS=7200
-      - MEETING_CLOSED_TTL_SECONDS=7200
-      - OBSERVABILITY_ROOT=observability/meetings
-      - TRANSCRIPTION_COST_PER_MINUTE_USD=0.003
     volumes:
-      - ./observability:/app/observability
+      - ./observability/output:/app/observability/output
     depends_on:
       - redis
 
@@ -21,21 +14,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["python", "-m", "worker.transcription_worker"]
+    command: ["python", "-m", "core.backend.src.worker.transcription_worker"]
     environment:
       - PYTHONUNBUFFERED=1
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - TRANSCRIBE_MODEL=gpt-4o-mini-transcribe
-      - TRANSCRIBE_LANGUAGE=pt
-      - TURN_DETECTION_THRESHOLD=0.5
-      - TURN_PREFIX_PADDING_MS=250
-      - TURN_SILENCE_DURATION_MS=700
-      - OBSERVABILITY_STORE_TRANSCRIPT_DELTAS=false
-      - AUDIO_SCAN_INTERVAL_SECONDS=1.0
-      - MEETING_IDLE_TIMEOUT_SECONDS=120
-      - MAX_ACTIVE_MEETINGS=3
     depends_on:
       - redis
 
@@ -43,28 +25,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["python", "-m", "worker.insights_worker"]
+    command: ["python", "-m", "core.backend.src.worker.insights_worker"]
     environment:
       - PYTHONUNBUFFERED=1
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - INSIGHTS_MODEL=gpt-4o-mini
-      - INSIGHTS_INPUT_COST_PER_1M_USD=0.15
-      - INSIGHTS_OUTPUT_COST_PER_1M_USD=0.60
-      - INSIGHTS_MAX_OUTPUT_TOKENS=180
-      - QA_MAX_OUTPUT_TOKENS=220
-      - INSIGHTS_QUESTION_MIN_WORDS=4
-      - INSIGHTS_QA_MIN_INTERVAL_SECONDS=1.5
-      - INSIGHTS_QUESTION_ASSEMBLY_WINDOW_SECONDS=5.0
-      - INSIGHTS_QUESTION_ASSEMBLY_MAX_PARTS=4
-      - INSIGHTS_QA_WORKERS=2
-      - INSIGHTS_INSIGHT_WORKERS=1
-      - INSIGHTS_PENDING_LIMIT_PER_MEETING=1
-      - INSIGHTS_BACKGROUND_DELAY_SECONDS=0.5
-      - INSIGHTS_MIN_NEW_TOKENS=8
-      - INSIGHTS_CONTEXT_SIMILARITY_THRESHOLD=0.85
-      - INSIGHTS_DEDUP_TTL_SECONDS=120
     depends_on:
       - redis
 

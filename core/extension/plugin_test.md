@@ -28,7 +28,7 @@ Esperado: `{"status":"ok"}`.
 1. Abrir `chrome://extensions/` (ou `edge://extensions/`).
 2. Ativar Developer Mode.
 3. Clicar em `Load unpacked`.
-4. Selecionar `c:\Users\Guuh\repositories\context_ai_plugin\extension`.
+4. Selecionar `c:\Users\Guuh\repositories\context_ai_plugin\core\extension`.
 
 ## Parte 3: Fluxo funcional
 
@@ -57,7 +57,7 @@ Objetivo: reduzir envio de silencio para baixar custo.
 1. Encerrar a reuniao pelo botao `Encerrar Reuniao`.
 2. Conferir se foi criada uma pasta em:
 ```text
-observability/meetings/{meeting_id}/
+observability/output/meetings/data_YYYY_MM_DD_HH_MM_SS/{meeting_id}/
 ```
 3. Confirmar que existem tres arquivos com timestamp:
 ```text

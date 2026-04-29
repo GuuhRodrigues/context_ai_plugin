@@ -10,7 +10,7 @@ Browser extension (Chrome/Edge) for the Context AI Plugin realtime meeting copil
 2. Go to `chrome://extensions/` (or `edge://extensions/`).
 3. Enable Developer Mode.
 4. Click `Load unpacked`.
-5. Select the `extension/` folder from this repository.
+5. Select the `core/extension/` folder from this repository.
 
 ## Configuration
 
@@ -29,11 +29,12 @@ By default, the extension connects to `http://localhost:8000`.
 ## Structure
 
 - `manifest.json`: extension config (Manifest V3)
-- `background.js`: minimal service worker for side panel behavior
-- `popup.html`: popup UI
-- `popup.js`: popup logic, audio capture, WebSockets
-- `content.js`: content script placeholder
-- `styles.css`: popup styles
+- `backend/background.js`: minimal service worker for side panel behavior
+- `frontend/popup.html`: popup UI
+- `frontend/popup.js`: popup logic, audio capture, WebSockets
+- `frontend/content.js`: content script placeholder
+- `frontend/styles.css`: popup styles
+- `observability/observability.js`: browser-side observability helpers
 
 ## Notes
 
@@ -44,4 +45,4 @@ By default, the extension connects to `http://localhost:8000`.
 - Reconnects WebSockets automatically on transient failures.
 - Renews token automatically when remaining TTL is below 1 hour.
 - Stores current meeting data in `chrome.storage.local`.
-- Closing a meeting generates JSONL, metrics JSON, and Markdown report files under `observability/meetings/{meeting_id}/`.
+- Closing a meeting generates JSONL, metrics JSON, and Markdown report files under `observability/output/meetings/data_YYYY_MM_DD_HH_MM_SS/{meeting_id}/`.
