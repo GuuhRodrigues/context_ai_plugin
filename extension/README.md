@@ -10,7 +10,7 @@ Browser extension (Chrome/Edge) for the Context AI Plugin realtime meeting copil
 2. Go to `chrome://extensions/` (or `edge://extensions/`).
 3. Enable Developer Mode.
 4. Click `Load unpacked`.
-5. Select the `core/extension/` folder from this repository.
+5. Select the `extension/` folder from this repository.
 
 ## Configuration
 

@@ -3,21 +3,22 @@ from __future__ import annotations
 import asyncio
 
 import redis
-from fastapi import WebSocket
+from fastapi import APIRouter, WebSocket
 
-from core.backend.configs import AUDIO_STREAM_MAXLEN
-from core.backend.src.services.meeting import (
+from backend.configs import AUDIO_STREAM_MAXLEN
+from backend.src.integrations.redis import (
+    audio_stream_key,
+    events_stream_key,
+    insights_channel,
+    redis_client_bytes,
+    transcript_channel,
+)
+from backend.src.routes.meetings import (
     is_meeting_closed,
     refresh_meeting_ttl,
     validate_token,
 )
-from core.backend.src.services.redis import (
-    audio_stream_key,
-    events_stream_key,
-    insights_channel,
-    transcript_channel,
-)
-from core.backend.src.utils import (
+from backend.src.utils import (
     decode_if_bytes,
     get_payload_from_fields,
     parse_backfill_seconds,
@@ -28,6 +29,9 @@ from observability.backend.observability import (
     increment_counter,
     increment_float_counter,
 )
+
+router = APIRouter()
+r = redis_client_bytes()
 
 
 async def require_websocket_auth(r: redis.Redis, ws: WebSocket, meeting_id: str) -> bool:
@@ -190,3 +194,13 @@ async def handle_event_stream(r: redis.Redis, ws: WebSocket, meeting_id: str) ->
         return
 
     await _stream_live_events(r, ws, meeting_id, channels)
+
+
+@router.websocket("/audio/{meeting_id}")
+async def audio_stream(ws: WebSocket, meeting_id: str):
+    await handle_audio_stream(r, ws, meeting_id)
+
+
+@router.websocket("/event/{meeting_id}")
+async def event_ws(ws: WebSocket, meeting_id: str):
+    await handle_event_stream(r, ws, meeting_id)

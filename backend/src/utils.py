@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any, Optional
 
-from core.backend.configs import API_BASE_URL, DEFAULT_BACKFILL_SECONDS, MAX_BACKFILL_SECONDS
+from backend.configs import API_BASE_URL, DEFAULT_BACKFILL_SECONDS, MAX_BACKFILL_SECONDS
 
 
 def websocket_base_url() -> str:

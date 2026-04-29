@@ -28,7 +28,7 @@ Esperado: `{"status":"ok"}`.
 1. Abrir `chrome://extensions/` (ou `edge://extensions/`).
 2. Ativar Developer Mode.
 3. Clicar em `Load unpacked`.
-4. Selecionar `c:\Users\Guuh\repositories\context_ai_plugin\core\extension`.
+4. Selecionar `c:\Users\Guuh\repositories\context_ai_plugin\extension`.
 
 ## Parte 3: Fluxo funcional
 

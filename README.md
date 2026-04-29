@@ -154,33 +154,34 @@ Backfill is replayed from `events:{meeting_id}` and then live events continue vi
 ```text
 CONTEXT_AI_PLUGIN/
 │
-├── core/
+├── backend/
+│   ├── main.py                 # FastAPI app composition
+│   ├── configs.py              # Shared backend configuration
+│   ├── src/
+│   │   ├── integrations/
+│   │   │   ├── redis.py
+│   │   │   └── openai.py
+│   │   ├── routes/
+│   │   │   ├── meetings.py
+│   │   │   └── websockets.py
+│   │   └── workers/
+│   │       ├── transcription_worker.py
+│   │       ├── insights_worker.py
+│   │       └── prompts.py
+│
+├── extension/
+│   ├── manifest.json           # Chrome extension manifest (V3)
 │   ├── backend/
-│   │   ├── main.py             # FastAPI server (meetings, websockets, auth, lifecycle)
-│   │   ├── configs.py          # Shared backend configuration
-│   │   ├── src/
-│   │   │   ├── services/
-│   │   │   │   ├── redis.py
-│   │   │   │   ├── openai.py
-│   │   │   │   ├── meeting.py
-│   │   │   │   └── websocket.py
-│   │   │   └── worker/
-│   │   │       ├── transcription_worker.py
-│   │   │       ├── insights_worker.py
-│   │   │       └── prompts.py
-│   ├── extension/
-│   │   ├── manifest.json       # Chrome extension manifest (V3)
-│   │   ├── backend/
-│   │   │   └── background.js   # Extension service worker
-│   │   ├── frontend/
-│   │   │   ├── popup.html
-│   │   │   ├── popup.js
-│   │   │   ├── content.js
-│   │   │   ├── styles.css
-│   │   │   └── icons/
-│   │   ├── observability/
-│   │   │   └── observability.js
-│   │   └── README.md
+│   │   └── background.js       # Extension service worker
+│   ├── frontend/
+│   │   ├── popup.html
+│   │   ├── popup.js
+│   │   ├── content.js
+│   │   ├── styles.css
+│   │   └── icons/
+│   ├── observability/
+│   │   └── observability.js
+│   └── README.md
 │
 ├── observability/
 │   ├── backend/
@@ -211,7 +212,7 @@ CONTEXT_AI_PLUGIN/
 
 ### Backend configs
 
-Non-sensitive backend values now live in `core/backend/configs.py`, grouped by subject:
+Non-sensitive backend values now live in `backend/configs.py`, grouped by subject:
 
 - `Config to Redis`
 - `Config to API`
@@ -224,7 +225,7 @@ Only `OPENAI_API_KEY` should come from the environment or `.env`.
 
 ### Extension audio upload (VAD)
 
-The extension uses client-side VAD in `core/extension/frontend/popup.js` and only sends frames when speech is detected (plus a short hangover window):
+The extension uses client-side VAD in `extension/frontend/popup.js` and only sends frames when speech is detected (plus a short hangover window):
 
 - `VAD_ENABLED`
 - `VAD_RMS_THRESHOLD`
@@ -262,7 +263,7 @@ docker compose up --build
 - Abra Chrome/Edge e vá para `chrome://extensions/` (ou `edge://extensions/`)
 - Ative "Modo do desenvolvedor"
 - Clique em "Carregar sem compactação"
-- Selecione a pasta `core/extension/` deste repositório
+- Selecione a pasta `extension/` deste repositório
 
 3. **Usar a extensão**
 
@@ -271,7 +272,7 @@ docker compose up --build
 - Permita acesso ao microfone quando solicitado
 - A transcrição, insights e Q&A aparecerão em tempo real na popup
 
-Veja `core/extension/README.md` para mais detalhes.
+Veja `extension/README.md` para mais detalhes.
 
 ---
 
@@ -310,8 +311,8 @@ This means the meeting is **closed** or the `token` is **invalid/expired**.
 
 ### Insights not showing
 - Confirm `insights_worker` is running.
-- Verify `INSIGHTS_MODEL` in `core/backend/configs.py` and the API key.
-- Check `INSIGHTS_DEDUP_TTL_SECONDS`, `INSIGHTS_MIN_NEW_TOKENS` and `INSIGHTS_CONTEXT_SIMILARITY_THRESHOLD` in `core/backend/configs.py`.
+- Verify `INSIGHTS_MODEL` in `backend/configs.py` and the API key.
+- Check `INSIGHTS_DEDUP_TTL_SECONDS`, `INSIGHTS_MIN_NEW_TOKENS` and `INSIGHTS_CONTEXT_SIMILARITY_THRESHOLD` in `backend/configs.py`.
 
 ---
 
@@ -349,7 +350,7 @@ This is an MVP/prototype with production‑oriented boundaries:
 ### How to propose improvements
 - Prefer small, reviewable PRs
 - Preserve streaming behavior and meeting lifecycle
-- Keep clear boundaries: `core/backend/src/` vs `core/extension/` vs `observability/`
+- Keep clear boundaries: `backend/src/` vs `extension/` vs `observability/`
 
 ### Product goal
 A browser plugin that provides real‑time conversational assistance during meetings.

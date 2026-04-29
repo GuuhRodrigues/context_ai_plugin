@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 import redis
 
-from core.backend.configs import OBSERVABILITY_ROOT, TRANSCRIPTION_COST_PER_MINUTE_USD
+from backend.configs import OBSERVABILITY_ROOT, TRANSCRIPTION_COST_PER_MINUTE_USD
 
 _word_re = re.compile(r"\S+")
 _decision_markers = (

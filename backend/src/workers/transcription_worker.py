@@ -9,7 +9,7 @@ from typing import Dict, Optional, Tuple
 
 from websockets.exceptions import ConnectionClosed
 
-from core.backend.configs import (
+from backend.configs import (
     AUDIO_SCAN_INTERVAL_SECONDS as SCAN_INTERVAL_SECONDS,
     AUDIO_STREAM_READ_BLOCK_MS as STREAM_READ_BLOCK_MS,
     AUDIO_STREAM_READ_COUNT as STREAM_READ_COUNT,
@@ -25,8 +25,8 @@ from observability.backend.observability import (
     increment_float_counter,
     now_ms as obs_now_ms,
 )
-from core.backend.src.services.openai import configure_transcription_session, openai_ws, send_event
-from core.backend.src.services.redis import (
+from backend.src.integrations.openai import configure_transcription_session, openai_ws, send_event
+from backend.src.integrations.redis import (
     add_event_to_stream,
     audio_stream_key,
     decode_if_bytes,

@@ -6,8 +6,8 @@ from typing import Any, Optional, Set
 
 import redis
 
-from core.backend.configs import EVENTS_STREAM_MAXLEN, REDIS_HOST, REDIS_PORT
-from core.backend.src.utils import decode_if_bytes
+from backend.configs import EVENTS_STREAM_MAXLEN, REDIS_HOST, REDIS_PORT
+from backend.src.utils import decode_if_bytes
 
 
 def redis_client() -> redis.Redis:

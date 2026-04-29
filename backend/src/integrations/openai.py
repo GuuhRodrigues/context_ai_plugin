@@ -7,7 +7,7 @@ from typing import Any, Optional
 import requests
 import websockets
 
-from core.backend.configs import (
+from backend.configs import (
     INSIGHTS_INPUT_COST_PER_1M_USD,
     INSIGHTS_MODEL,
     INSIGHTS_OUTPUT_COST_PER_1M_USD,

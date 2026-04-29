@@ -13,7 +13,7 @@ from typing import Any, Deque, Dict, Optional, Set, Tuple
 
 import redis
 
-from core.backend.configs import (
+from backend.configs import (
     INSIGHTS_ACRONYM_MAX_LEN as ACRONYM_MAX_LEN,
     INSIGHTS_ACRONYM_MIN_LEN as ACRONYM_MIN_LEN,
     INSIGHTS_BACKGROUND_DELAY_SECONDS,
@@ -42,8 +42,8 @@ from core.backend.configs import (
     QA_MAX_OUTPUT_TOKENS,
 )
 from observability.backend.observability import now_ms as obs_now_ms
-from core.backend.src.services.openai import openai_chat
-from core.backend.src.services.redis import (
+from backend.src.integrations.openai import openai_chat
+from backend.src.integrations.redis import (
     add_event_to_stream,
     insights_channel,
     now_ts,
@@ -53,7 +53,7 @@ from core.backend.src.services.redis import (
     redis_setnx_ttl,
     transcript_pattern,
 )
-from core.backend.src.worker.prompts import build_insights_prompt, build_qa_prompt
+from backend.src.workers.prompts import build_insights_prompt, build_qa_prompt
 
 
 def event_ts_ms(evt: Dict[str, Any]) -> Optional[int]:
